@@ -7,7 +7,7 @@ const app = express();
 
 app.use(
   cors({
-    origin: "*",
+    origin: "https://fbomapping2025.vercel.app",
     methods: ["GET"],
     allowedHeaders: ["Content-Type", "Authorization"],
   }),
