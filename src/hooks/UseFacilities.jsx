@@ -16,7 +16,7 @@ export default function useFacilities() {
     queryFn: async () => {
       try {
         const res = await axios.get(
-          "https://fbomapping2025.vercel.app/facilities?format=geojson",
+          "https://fbomapping2025.vercel.app/facilities",
         );
         // ensure res.data is always defined
         return res.data ?? [];
