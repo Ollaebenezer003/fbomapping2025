@@ -16,6 +16,8 @@
     "axios": "^1.13.6",
     "choices.js": "^11.1.0",
     "concurrently": "^9.2.1",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
     "leaflet": "^1.9.4",
     "leaflet.markercluster": "^1.5.3",
     "lucide-react": "^0.577.0",
