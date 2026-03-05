@@ -1,0 +1,1427 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&family=Lato:ital,wght@0,100;0,300;0,400;0,700;0,900;1,100;1,300;1,400;1,700;1,900&family=Nunito:ital,wght@0,200..1000;1,200..1000&family=Open+Sans:ital,wght@0,300..800;1,300..800&family=Poppins:ital,wght@0,100;0,200;0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,100;1,200;1,300;1,400;1,500;1,600;1,700;1,800;1,900&display=swap");
+@import "leaflet/dist/leaflet.css";
+
+body {
+  margin: 0;
+  font-family: "lato";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: #eaeaed;
+  font-size: 14px;
+  font-weight: 500;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.navContainer {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  position: sticky;
+  top: 0;
+  left: 0;
+  z-index: 1000;
+}
+
+.navHeaderContainer {
+  display: flex;
+  flex-direction: row;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
+  height: 30px;
+  background-color: #7b271b;
+  margin-top: 0px;
+}
+
+.navHeaderText {
+  font-weight: 600;
+  color: white;
+}
+
+.navMenuSection {
+  display: flex;
+  flex-direction: row;
+  justify-content: flex-start;
+  align-items: center;
+  width: 100%;
+  margin: 0px auto;
+  padding: 0px;
+  height: 60px;
+  background-color: #f5f5f7;
+  transition: all 0.3s ease-in-out; /* Smooth transition */
+}
+
+.navMenuContainer {
+  display: flex;
+  flex-direction: row;
+  justify-content: flex-start;
+  align-items: center;
+  width: 20%;
+  margin: 0px auto;
+  height: 100%;
+  background-color: #f5f5f7;
+  transition: all 0.3s ease-in-out; /* Smooth transition */
+}
+
+.navLink {
+  display: flex;
+  flex-direction: row;
+  justify-content: left;
+  align-items: flex-start;
+  margin: 20px;
+  width: 50%;
+}
+
+.navLinkItems {
+  display: flex;
+  flex-direction: row;
+  list-style-type: none;
+  margin: 2px;
+  padding: 0;
+}
+
+.navLinkItems li a {
+  margin: 5px;
+  color: black;
+  padding: 7px;
+  padding-right: 20px;
+  border-radius: 3px;
+  text-decoration: none;
+  transition: all 0.2s ease-in;
+}
+
+.navLinkItems li a:active {
+  color: #385b31;
+}
+
+.navLinkItems li a:focus {
+  color: #385b31;
+}
+
+.navLinkItems li a:hover {
+  color: #385b31;
+  font-weight: 600;
+}
+
+.navImage {
+  height: 55px;
+  width: 55px;
+  margin: 5px 15px;
+}
+
+/* Page Body Styles */
+/* ------------------------------------------------- */
+
+.pageContainer {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100vh;
+  overflow: hidden;
+  padding: 0px;
+}
+
+.pageContent {
+  display: flex;
+  flex-direction: row;
+  flex: 1;
+  margin-top: 0px;
+}
+
+.leftMenuContainer {
+  display: flex;
+  flex-direction: column;
+  width: 17%;
+  background-color: #385b31;
+  color: white;
+}
+
+.mainMenuContainer {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  height: 100%;
+  padding-top: 0px;
+  position: relative; /* keeps absolutely positioned map controls inside */
+}
+
+.rightMenuContainer {
+  display: flex;
+  flex-direction: column;
+  width: 20%;
+  background-color: #385b31;
+  color: white;
+}
+
+.leaflet-control-container {
+  z-index: 900; /* less than Nav */
+}
+
+/* ----------------------- SMALL SCREEN DISPLAY ----------------------
+@media (min-width: 769px) and (max-width: 1368px) {
+  .pageContainer {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 80vh;
+    overflow: hidden;
+    padding: 0px;
+  }
+
+  .pageContent {
+    display: flex;
+    flex-direction: row;
+    flex: 1;
+    margin-top: 0px;
+  }
+
+  .leftMenuContainer {
+    display: flex;
+    flex-direction: column;
+    width: 17%;
+    background-color: #385b31;
+    color: white;
+  }
+
+  .mainMenuContainer {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    height: 100%;
+    padding-top: 0px;
+    position: relative;
+  }
+
+  .rightMenuContainer {
+    display: flex;
+    flex-direction: column;
+    width: 20%;
+    background-color: #385b31;
+    color: white;
+  }
+
+  .leaflet-control-container {
+    z-index: 900;
+  }
+} */
+
+/* Left Menu Styles */
+/* ------------------------------------------------- */
+.leftMenuContent {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 95%;
+}
+
+.menuHeader {
+  display: flex;
+  align-items: center;
+  text-align: center;
+  font-size: 18px;
+  font-weight: 700;
+  padding: 20px 0px;
+  margin: 5px 0px 10px 0px;
+  text-transform: uppercase;
+}
+
+#catSpacing {
+  margin-top: 40px;
+}
+
+.menuHeader::before,
+.menuHeader::after {
+  content: "";
+  flex: 1;
+  border-bottom: 1px solid #ccc;
+}
+
+.menuHeader:not(:empty)::before {
+  margin-right: 0.75em;
+}
+
+.menuHeader:not(:empty)::after {
+  margin-left: 0.75em;
+}
+
+.subMenuHeader {
+  display: flex;
+  align-items: start;
+  font-size: 12px;
+  font-weight: 700;
+  color: #a9a9a9;
+  padding: 5px 5px 30px 5px;
+}
+
+.leftMenuForm {
+  display: flex;
+  flex-direction: column;
+  width: 99%;
+  padding: 5px 3px;
+  height: 100%;
+}
+
+.leftMenuForm label {
+  font-size: 16px;
+  font-weight: 700;
+  padding: 7px;
+  text-transform: uppercase;
+}
+
+.leftMenuForm input {
+  width: 90%;
+  font-size: 14px;
+  font-weight: 300;
+  margin: 0px 0px 20px 5px;
+  border-radius: 2px;
+  outline: none;
+  border: solid 0.5px white;
+}
+
+.leftMenuForm input:hover {
+  border: solid 0.5px #151f13;
+}
+
+.leftMenuForm input:focus {
+  border: solid 0.5px #151f13;
+}
+
+.leftMenuForm input:active {
+  border: solid 0.5px #151f13;
+}
+
+.dropdownWrapper {
+  position: relative;
+  width: 100%;
+  margin: 7px 0px 16px 0px;
+}
+
+.dropdownInputWrapper {
+  position: relative;
+}
+
+.dropdownInputWrapper input {
+  width: 95%;
+  padding: 7px 30px 7px 5px;
+  box-sizing: border-box;
+}
+
+.arrow {
+  position: absolute;
+  right: 20px;
+  top: 35%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  font-size: 14px;
+  color: #555;
+}
+
+.dropIcon {
+  width: 15px;
+  height: 15px;
+}
+
+.clearBtn {
+  position: absolute;
+  right: 10px;
+  top: 35%;
+  transform: translateY(-50%);
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 16px;
+  color: #555;
+}
+
+.clearBtn:hover {
+  color: #000;
+}
+
+.dropdownList {
+  position: absolute;
+  top: 50%;
+  left: 5px;
+  width: 94%;
+  max-height: 255px;
+  padding: 0px;
+  overflow-y: auto;
+  background: #263d22;
+  border-radius: 5px;
+  border: 1px solid #263d22;
+  z-index: 100;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+}
+
+.dropdownList li {
+  display: block;
+  list-style: none;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+
+.dropdownList li:hover {
+  border-radius: 5px;
+  background: #2f4c29;
+}
+
+.dropdownList li:active {
+  border-radius: 5px;
+  background: #1d2e1a;
+}
+
+.noEntry {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
+  padding: 10px 0px;
+  gap: 10px;
+  text-align: center;
+  color: #888;
+  cursor: default;
+}
+
+.noEntry span {
+  width: 100%;
+}
+
+.noEntryIcon {
+  width: 40px;
+  height: 40px;
+}
+
+.dropdownWrapper.disabled input {
+  background-color: #eee;
+  cursor: not-allowed;
+  border: solid 0.5px white;
+}
+
+.checkboxContent {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.checkboxRow {
+  display: flex;
+  flex-direction: row;
+  justify-content: start;
+  align-items: center;
+  padding: 10px 10px;
+  gap: 15px;
+}
+
+#categorySpacing {
+  min-height: 30px;
+}
+
+.checkboxRow input {
+  margin: 0px;
+}
+
+.checkboxItem {
+  margin: 0px;
+  padding: 0px;
+  accent-color: #184c4e;
+  transform: scale(2.2);
+}
+
+.checkboxLabel {
+  width: 40%;
+  text-align: left;
+  text-transform: none;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.checkboxLegendFacility {
+  width: 50px;
+  height: 20px;
+  background-color: #2a81cb;
+  border: solid 1px white;
+  border-radius: 2px;
+  box-shadow: 0px 4px 7px rgba(0, 0, 0, 0.2);
+}
+
+.checkboxLegendNonFacility {
+  width: 50px;
+  height: 20px;
+  background-color: #3ab54a;
+  border: solid 1px white;
+  border-radius: 2px;
+  box-shadow: 0px 4px 7px rgba(0, 0, 0, 0.2);
+}
+
+.leftMenuForm datalist {
+  width: 100%;
+  background-color: #385b31;
+}
+
+.leaflet-tooltip.state-label {
+  background: transparent;
+  border: none;
+  font-size: 12px;
+  font-weight: bold;
+  color: #444;
+}
+
+.resetBtnContent {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  padding: 10px;
+  margin-top: auto;
+}
+
+.resetBtnContent button {
+  display: flex;
+  flex-direction: row;
+  font-family: "Lato";
+  font-size: 16px;
+  font-weight: 600;
+  padding: 8px 10px;
+  gap: 10px;
+  border-radius: 3px;
+  color: white;
+  background-color: #263d22;
+  border: solid 0.5px wheat;
+  transition: transform 0.3s ease;
+}
+
+.resetBtnContent button:hover {
+  transform: scale(1.1);
+}
+
+.resetButtonIcon {
+  width: 20px;
+  height: 20px;
+}
+
+/* Right Menu Styles */
+/* ------------------------------------------------- */
+.rightMenuContent {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+.cardsContainer {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
+  gap: 20px;
+}
+
+.infoCard {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 95%;
+  height: 95px;
+  border-radius: 5px;
+  color: white;
+  font-size: 40px;
+  font-weight: 800;
+  letter-spacing: 2px;
+  padding: 10px 0px;
+  border: solid 0.5px white;
+  background: linear-gradient(270deg, #5b894d, #496f3f);
+  box-shadow: 0px 4px 7px rgba(0, 0, 0, 0.2);
+}
+
+.infoCardText {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+}
+
+.cardSubtitle {
+  font-size: 16px;
+  font-weight: 500;
+  padding: 10px 0px;
+  letter-spacing: 0px;
+}
+
+/* SEARCH STYLES */
+/* ------------------------------------------------- */
+.searchFormSection {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  flex: 1;
+  position: relative;
+}
+
+.searchForm {
+  display: flex;
+  flex-direction: column;
+  padding: 0px;
+  margin: 0px;
+}
+
+.searchSection {
+  display: flex;
+  flex-direction: row;
+  position: relative;
+  width: 500px;
+  transform: translateX(-40%);
+  /* display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  width: 100%;
+  margin: 5px; */
+}
+
+.searchSection:hover {
+  box-shadow: 0px 4px 7px rgba(0, 0, 0, 0.2);
+}
+
+.searchForm input {
+  width: 100%;
+  font-size: 14px;
+  font-family: "lato";
+  padding: 7px 0px 7px 15px;
+  border: 1px solid #385b31;
+  border-radius: 5px 0px 0px 5px;
+  outline: none;
+}
+
+.clearSearchBtn {
+  position: absolute;
+  right: 60px;
+  top: 50%;
+  transform: translateY(-50%);
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 18px;
+  color: #184c4e;
+}
+
+.searchButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: default;
+  font-size: 16px;
+  background-color: #2f4c29;
+  padding: 0px 15px;
+  color: white;
+  border-radius: 0px 5px 5px 0px;
+  border: solid 1px #2f4c29;
+}
+
+.searchButton:hover {
+  background-color: #385b31;
+}
+
+.searchButtonIcon {
+  width: 25px;
+  height: 25px;
+}
+
+.searchDropdown {
+  position: absolute;
+  top: 48px;
+  width: 100%;
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  max-height: 250px;
+  overflow-y: auto;
+  z-index: 10;
+}
+
+.dropdownItem {
+  padding: 10px 12px;
+  cursor: pointer;
+}
+
+.dropdownItem:hover {
+  background: #f0f0f0;
+}
+
+.itemSuggest {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 7px;
+  font-weight: bold;
+  color: #555;
+}
+
+/* LOADIND STYLES */
+/* ------------------------------------------------- */
+.loaderContainer {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(0, 0, 0, 0.3);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  font-size: 1.2rem;
+  color: #fff;
+  z-index: 9999;
+}
+
+/* Spinner */
+.rollingLoader {
+  width: 60px;
+  height: 60px;
+  border: 6px solid rgba(0, 0, 0, 0.1);
+  border-top-color: #385b31;
+  border-radius: 50%;
+  animation: roll 1s linear infinite;
+}
+
+@keyframes roll {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Facility Pop Up Modal Styles */
+/* ------------------------------------------------- */
+.modalOverlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 5000;
+}
+
+.modalContainer {
+  background: #fff;
+  color: #184c4e;
+  width: 970px;
+  max-height: 88vh;
+  overflow-y: auto;
+  border-radius: 14px 5px 5px 14px;
+  padding: 0px 20px 20px 20px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+  position: relative;
+}
+
+.modalHeaderSection {
+  width: 100%;
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: #fff;
+  padding: 15px 0px 10px 0;
+}
+
+.modalHeaderContent {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.modalHeader {
+  display: flex;
+  width: 100%;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.modalTitle {
+  margin-bottom: 10px;
+  font-size: 22px;
+  font-weight: 800;
+  padding: 5px 0px;
+}
+
+.closeBtn {
+  /* position: absolute;
+  right: 15px;
+  top: 12px; */
+  font-size: 24px;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.closeIcon {
+  width: 25px;
+  height: 25px;
+  margin: 5px 0px;
+  cursor: pointer;
+  transition: transform 0.3s ease;
+}
+
+.closeIcon:hover {
+  background-color: #eaeaed;
+  transform: scale(1.2);
+}
+
+.modalContainer::-webkit-scrollbar {
+  width: 8px;
+}
+
+.modalContainer::-webkit-scrollbar-track {
+  background: #e5e5e5;
+  border-radius: 10px;
+}
+
+.modalContainer::-webkit-scrollbar-thumb {
+  background: #184c4e;
+  border-radius: 10px;
+}
+
+.modalContainer::-webkit-scrollbar-thumb:hover {
+  background: #0f3637;
+}
+
+.modalHeadRule {
+  width: 99.5%;
+  outline: none;
+  border: solid 1.5px black;
+  border-radius: 30px;
+  margin: 5px 0px;
+}
+
+.modalFacilityLocationSection {
+  display: flex;
+  flex-direction: row;
+  justify-content: space-between;
+  flex: 1 0 auto;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  margin: 15px 0px;
+  padding: 0px 0px 20px 0px;
+  gap: 15px;
+}
+
+.modalFacilityLocation {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-shrink: 0;
+  min-width: max-content;
+  background-color: #eaeaed;
+  font-size: 16px;
+  font-weight: 700;
+  padding: 6px 20px;
+  border-radius: 10px;
+  gap: 5px;
+  border: solid 0.5px #184c4e;
+}
+
+.modalFacilityLocation span {
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.locationIcons {
+  width: 20px;
+  height: 20px;
+}
+
+.modalSection {
+  display: flex;
+  flex-direction: row;
+  margin-top: 20px;
+  border: solid 1px #184c4e;
+  border-radius: 7px;
+  padding: 0px 15px;
+  gap: 1%;
+}
+
+.modalSectionLeft {
+  width: 49.5%;
+}
+
+.modalSectionRight {
+  width: 49.5%;
+}
+
+.modalSection p {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 16px;
+}
+
+.modalSection a {
+  text-decoration: none;
+  color: #184c4e;
+}
+
+/* .bioIcon:hover {
+  transform: rotate(180deg) scale(1.01);
+} */
+
+.modalImageSection {
+  display: flex;
+  margin-top: 20px;
+  border-radius: 7px;
+  padding: 5px 0px;
+  gap: 1%;
+  position: relative;
+  min-height: 180px;
+}
+
+.modalImageContent {
+  width: 100%;
+  display: flex;
+  flex-direction: row;
+  justify-content: space-between;
+  gap: 1%;
+}
+
+.modalImage {
+  width: 250px;
+  border-radius: 10px;
+}
+
+/* Thumbnail wrapper */
+.imageWrapper {
+  position: relative;
+  width: 250px;
+  border-radius: 10px;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+/* Image itself */
+.modalImage {
+  width: 100%;
+  border-radius: 10px;
+  display: block;
+}
+
+/* Hover overlay */
+.imageOverlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.55);
+  opacity: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  transition: opacity 0.3s ease-in-out;
+}
+
+.imageWrapper:hover .imageOverlay {
+  opacity: 1;
+}
+
+.imageOverlayContent {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+}
+
+/* "Preview" text */
+.previewText {
+  color: #fff;
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0px 5px;
+}
+
+.previewIcon {
+  width: 20px;
+  height: 20px;
+  color: white;
+  margin: 0px 5px;
+}
+
+/* Loading Animation */
+.imageLoader {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  background: rgba(255, 255, 255, 0.9);
+  padding: 12px 18px;
+  border-radius: 10px;
+  /* box-shadow: 0 4px 10px rgba(0, 0, 0, 0.15); */
+}
+
+.spinner {
+  font-size: 28px;
+  animation: spin 1s linear infinite;
+  margin-bottom: 8px;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Fullscreen modal overlay */
+.imageModalOverlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.85);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 50000;
+  cursor: zoom-out;
+}
+
+/* Center image */
+.imageModalContent {
+  max-width: 90%;
+  max-height: 90%;
+}
+
+.fullImage {
+  width: 100%;
+  height: auto;
+  border-radius: 10px;
+  object-fit: contain;
+}
+
+.closeImageBtn {
+  position: absolute;
+  top: 20px;
+  right: 25px;
+  background: rgba(0, 0, 0, 0.65);
+  color: #fff;
+  font-size: 30px;
+  border: none;
+  outline: none;
+  border-radius: 50%;
+  width: 45px;
+  height: 45px;
+  cursor: pointer;
+  z-index: 50001;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s ease-in-out;
+}
+
+.closeImageBtn:hover {
+  transform: scale(1.2);
+  background: rgba(0, 0, 0, 0.65);
+}
+
+.closeImageIcon {
+  width: 25px;
+  height: 25px;
+  margin: 5px 0px;
+  cursor: pointer;
+  transition: transform 0.3s ease;
+}
+
+.closeImageIcon:hover {
+  transform: scale(1.2);
+}
+
+.modalTableSection {
+  display: flex;
+  flex-direction: row;
+  margin-top: 20px;
+  border-radius: 7px;
+  padding: 0px;
+  gap: 1%;
+}
+
+.tableSectionHeader {
+  font-size: 16px;
+  font-weight: 800;
+  padding: 10px 10px;
+}
+
+.modalFacilityLocationSection::-webkit-scrollbar {
+  height: 8px;
+}
+
+.modalFacilityLocationSection::-webkit-scrollbar-track {
+  background: #e5e5e5;
+  border-radius: 10px;
+}
+
+.modalFacilityLocationSection::-webkit-scrollbar-thumb {
+  background: #184c4e;
+  border-radius: 10px;
+}
+
+.modalFacilityLocationSection::-webkit-scrollbar-thumb:hover {
+  background: #0f3637;
+}
+
+/* Modal Table styles */
+.tableContainer {
+  width: 100%;
+  max-width: 485px;
+  background: #eaeaed;
+  color: black;
+  border-radius: 0px;
+  overflow: hidden;
+  font-size: 16px;
+}
+
+.tableHeader {
+  background: #184c4e;
+  color: white;
+  padding: 15px;
+  font-weight: 800;
+}
+
+.tableBody {
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+/* Row styling */
+.tableRow {
+  display: grid;
+  grid-template-columns: 40% 60%;
+  padding: 15px;
+  border-bottom: 1px solid #184c4e;
+}
+
+.col {
+  font-weight: 600;
+}
+
+.tableRow .col:nth-child(1) {
+  font-weight: 600;
+  padding: 0px 5px 0px 0px;
+}
+
+.tableRow .col:nth-child(2) {
+  font-size: 14px;
+  font-weight: 400;
+  padding-left: 5px;
+}
+
+/* Scrollbar styling */
+.tableBody::-webkit-scrollbar {
+  width: 6px;
+  padding: 4px 0px;
+}
+
+.tableBody::-webkit-scrollbar-thumb {
+  background: #184c4e;
+  border-radius: 3px;
+}
+
+.tableBody::-webkit-scrollbar-track {
+  background: #f5f5f7;
+}
+
+/* IMAGE LOADER SECTION */
+/* --------------------------------------------------- */
+
+/* ----------------------- SMALL SCREEN DISPLAY ---------------------- */
+@media (min-width: 901px) and (max-width: 1368px) {
+  html,
+  body {
+    margin: 0;
+    font-family: "lato";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    background-color: #eaeaed;
+    font-size: 14px;
+    font-weight: 500;
+    height: auto;
+    min-height: 100%;
+    overflow-y: auto;
+  }
+
+  /* Page Body Styles */
+  /* ------------------------------------------------- */
+
+  .pageContainer {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100vh;
+    padding: 0px;
+  }
+
+  .leftMenuContainer {
+    display: flex;
+    flex-direction: column;
+    min-width: 200px;
+    background-color: #385b31;
+    color: white;
+  }
+
+  .mainMenuContainer {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 600px;
+    padding-top: 0px;
+    position: relative; /* keeps absolutely positioned map controls inside */
+  }
+
+  .rightMenuContainer {
+    display: flex;
+    flex-direction: column;
+    min-width: 260px;
+    background-color: #385b31;
+    color: white;
+  }
+
+  .leaflet-control-container {
+    z-index: 900;
+  }
+
+  .leftMenuContainer,
+  .rightMenuContainer,
+  .mainMenuContainer {
+    overflow: visible;
+  }
+
+  .menuHeader {
+    display: flex;
+    align-items: center;
+    text-align: center;
+    font-size: 15px;
+    font-weight: 600;
+    padding: 20px 0px;
+    margin: 5px 0px 10px 0px;
+    text-transform: uppercase;
+  }
+
+  .cardsContainer {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    width: 100%;
+    gap: 20px;
+  }
+
+  .infoCard {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    width: 95%;
+    height: 50px;
+    border-radius: 5px;
+    color: white;
+    font-size: 25px;
+    font-weight: 800;
+    letter-spacing: 2px;
+    padding: 10px 0px;
+    border: solid 0.5px white;
+    background: linear-gradient(270deg, #5b894d, #496f3f);
+    box-shadow: 0px 4px 7px rgba(0, 0, 0, 0.2);
+  }
+
+  .infoCardText {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+  }
+
+  .cardSubtitle {
+    font-size: 16px;
+    font-weight: 500;
+    padding: 5px 0px;
+    letter-spacing: 0px;
+  }
+
+  .leftMenuContent {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: auto;
+  }
+
+  .leftMenuContainer,
+  .rightMenuContainer,
+  .mainMenuContainer {
+    overflow: visible;
+  }
+
+  .checkboxContent {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .checkboxRow {
+    width: 100%;
+    display: flex;
+    flex-direction: row;
+    justify-content: start;
+    align-items: center;
+    padding: 10px 10px;
+    gap: 15px;
+  }
+
+  #categorySpacing {
+    min-height: 30px;
+  }
+
+  .checkboxRow input {
+    margin: 0px;
+  }
+
+  .checkboxItem {
+    display: flex;
+    margin: 0px;
+    padding: 0px;
+    accent-color: #184c4e;
+    transform: scale(2.2);
+  }
+
+  .checkboxLabel {
+    width: 40%;
+    text-align: left;
+    text-transform: none;
+    font-size: 14px;
+    font-weight: 700;
+  }
+
+  .checkboxLegendFacility {
+    width: 30px;
+    height: 20px;
+    background-color: #2a81cb;
+    border: solid 1px white;
+    border-radius: 2px;
+    box-shadow: 0px 4px 7px rgba(0, 0, 0, 0.2);
+  }
+
+  .checkboxLegendNonFacility {
+    width: 30px;
+    height: 20px;
+    background-color: #3ab54a;
+    border: solid 1px white;
+    border-radius: 2px;
+    box-shadow: 0px 4px 7px rgba(0, 0, 0, 0.2);
+  }
+}
+
+/* ----------------------- MOBILE SCREEN DISPLAY ---------------------- */
+@media (max-width: 900px) {
+  html,
+  body {
+    margin: 0;
+    font-family: "lato";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    background-color: #eaeaed;
+    font-size: 14px;
+    font-weight: 500;
+    height: auto;
+    min-height: 100%;
+    overflow-y: auto;
+  }
+
+  /* Page Body Styles */
+  /* ------------------------------------------------- */
+
+  .pageContainer {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100vh;
+    padding: 0px;
+  }
+
+  .navHeaderContainer {
+    display: flex;
+    flex-direction: row;
+    justify-content: center;
+    align-items: center;
+    width: 100%;
+    height: 30px;
+    background-color: #7b271b;
+    margin-top: 0px;
+  }
+
+  .navMenuSection {
+    display: flex;
+    flex-direction: row;
+    justify-content: start;
+    align-items: start;
+    width: 100%;
+    margin: 0px auto;
+    padding: 0px;
+    height: 60px;
+    background-color: #f5f5f7;
+    transition: all 0.3s ease-in-out; /* Smooth transition */
+  }
+
+  .navMenuContainer {
+    display: flex;
+    flex-direction: row;
+    justify-content: start;
+    align-items: center;
+    width: 100%;
+    margin: 0px auto;
+    height: 100%;
+    background-color: #f5f5f7;
+    transition: all 0.3s ease-in-out; /* Smooth transition */
+  }
+
+  .searchFormSection {
+    display: none;
+  }
+
+  .leftMenuContainer {
+    display: none;
+  }
+
+  .mainMenuContainer {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 600px;
+    padding-top: 0px;
+    position: relative; /* keeps absolutely positioned map controls inside */
+  }
+
+  .rightMenuContainer {
+    display: none;
+  }
+
+  .leaflet-control-container {
+    z-index: 900;
+  }
+
+  .leftMenuContainer,
+  .rightMenuContainer,
+  .mainMenuContainer {
+    overflow: visible;
+  }
+
+  .menuHeader {
+    display: flex;
+    align-items: center;
+    text-align: center;
+    font-size: 15px;
+    font-weight: 600;
+    padding: 20px 0px;
+    margin: 5px 0px 10px 0px;
+    text-transform: uppercase;
+  }
+}

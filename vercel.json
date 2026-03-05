@@ -1,0 +1,17 @@
+{
+  "functions": {
+    "api/index.js": {
+      "maxDuration": 10
+    }
+  },
+  "routes": [
+    {
+      "src": "/facilities",
+      "dest": "/api/index.js"
+    },
+    {
+      "src": "/media",
+      "dest": "/api/index.js"
+    }
+  ]
+}
