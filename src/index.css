@@ -1200,6 +1200,18 @@ body {
     z-index: 900;
   }
 
+  .leaflet-bar {
+    z-index: 900;
+  }
+
+  .leaflet-control {
+    z-index: 900;
+  }
+
+  .leaflet-control-zoom {
+    z-index: 900;
+  }
+
   .leftMenuContainer,
   .rightMenuContainer,
   .mainMenuContainer {
