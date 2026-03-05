@@ -1183,7 +1183,7 @@ body {
     display: flex;
     flex-direction: column;
     flex: 1;
-    min-height: 800px;
+    min-height: 600px;
     padding-top: 0px;
     position: relative; /* keeps absolutely positioned map controls inside */
   }
@@ -1365,6 +1365,16 @@ body {
     height: 30px;
     background-color: #7b271b;
     margin-top: 0px;
+  }
+
+  .navContainer {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    position: sticky;
+    top: 0;
+    left: 0;
+    z-index: 3000;
   }
 
   .navMenuSection {
