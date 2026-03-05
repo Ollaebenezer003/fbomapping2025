@@ -22,7 +22,7 @@ body {
   position: sticky;
   top: 0;
   left: 0;
-  z-index: 1000;
+  z-index: 3000;
 }
 
 .navHeaderContainer {
@@ -158,6 +158,22 @@ body {
 
 .leaflet-control-container {
   z-index: 900; /* less than Nav */
+}
+
+.leaflet-control-container {
+  z-index: 900;
+}
+
+.leaflet-bar {
+  z-index: 900;
+}
+
+.leaflet-control {
+  z-index: 900;
+}
+
+.leaflet-control-zoom {
+  z-index: 900;
 }
 
 /* ----------------------- SMALL SCREEN DISPLAY ----------------------
@@ -1169,6 +1185,16 @@ body {
     flex-direction: row;
     flex: 1;
     margin-top: 0px;
+  }
+
+  .navContainer {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    position: sticky;
+    top: 0;
+    left: 0;
+    z-index: 3000;
   }
 
   .leftMenuContainer {
