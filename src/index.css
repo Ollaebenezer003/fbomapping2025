@@ -1183,7 +1183,7 @@ body {
     display: flex;
     flex-direction: column;
     flex: 1;
-    min-height: 600px;
+    min-height: 800px;
     padding-top: 0px;
     position: relative; /* keeps absolutely positioned map controls inside */
   }
