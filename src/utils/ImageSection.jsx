@@ -28,24 +28,24 @@ function ImageSection({ attachments, name }) {
         style={{ opacity: showLoader ? 0.3 : 1 }}
       >
         <ImagePreview
-          src={`http://localhost:8082/media?url=${encodeURIComponent(
-            attachments[0].download_small_url
+          src={`https://fbomapping2025.vercel.app/media?url=${encodeURIComponent(
+            attachments[0].download_small_url,
           )}`}
           alt={name}
           className="modalImage"
         />
 
         <ImagePreview
-          src={`http://localhost:8082/media?url=${encodeURIComponent(
-            attachments[0].download_medium_url
+          src={`https://fbomapping2025.vercel.app/media?url=${encodeURIComponent(
+            attachments[0].download_medium_url,
           )}`}
           alt={name}
           className="modalImage"
         />
 
         <ImagePreview
-          src={`http://localhost:8082/media?url=${encodeURIComponent(
-            attachments[0].download_large_url
+          src={`https://fbomapping2025.vercel.app/media?url=${encodeURIComponent(
+            attachments[0].download_large_url,
           )}`}
           alt={name}
           className="modalImage"
