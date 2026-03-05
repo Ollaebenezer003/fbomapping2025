@@ -1,5 +1,5 @@
 import { useFilters } from "../context/FilterContext";
-import { computeStats } from "../utils/ComputeStats";
+import { computeStats } from "./ComputeStats";
 import useFacilities from "../hooks/UseFacilities";
 
 const RightMenu = () => {
