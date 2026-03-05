@@ -21,6 +21,7 @@ const KOBO_URL =
 // GET FACILITIES
 app.get("/facilities", async (req, res) => {
   try {
+    console.log("KOBO TOKEN:", process.env.KOBO_TOKEN ? "Loaded" : "Missing");
     const response = await axios.get(KOBO_URL, {
       headers: {
         Authorization: `Token ${process.env.KOBO_TOKEN}`,
@@ -86,4 +87,6 @@ app.get("/media", async (req, res) => {
   }
 });
 
-export default app;
+export default function handler(req, res) {
+  return app(req, res);
+}
