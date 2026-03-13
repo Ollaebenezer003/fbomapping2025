@@ -22,7 +22,7 @@ app.use(express.json());
 const KOBO_URL =
   "https://kf.kobotoolbox.org/api/v2/assets/axiToevLp9NRbpQvzMBKV3/data/?format=json&attachments=true";
 
-const CACHE_KEY = "facilities";
+const CACHE_KEY = "facilities_TBD"; // "facilities" for actual caching
 const CACHE_TTL = 300; // 5 minutes
 
 // GET FACILITIES
@@ -34,11 +34,11 @@ app.get("/facilities", async (req, res) => {
     const limit = Number(req.query.limit) || 500;
     const format = req.query.format || "json";
 
-    // const cached = getCache(CACHE_KEY);
+    const cached = getCache(CACHE_KEY);
 
-    // if (cached) {
-    //   return sendFormattedResponse(res, cached, page, limit, format);
-    // }
+    if (cached) {
+      return sendFormattedResponse(res, cached, page, limit, format);
+    }
 
     const response = await axios.get(KOBO_URL, {
       headers: {
