@@ -89,9 +89,15 @@ app.get("/facilities", async (req, res) => {
 
     setCache(CACHE_KEY, cleaned, CACHE_TTL);
 
-    res.setHeader("Cache-Control", "s-maxage=300, stale-while-revalidate");
+    res.setHeader(
+      "Cache-Control",
+      "public, max-age=0, s-maxage=300, stale-while-revalidate=300",
+    );
 
-    return sendFormattedResponse(res, cleaned, page, limit, format);
+    // invalidate cache if the dataset is too small
+    if (cached && cached.length > 500) {
+      return sendFormattedResponse(res, cached, page, limit, format);
+    }
   } catch (err) {
     console.error("Kobo fetch error:", err.response?.data || err);
 
