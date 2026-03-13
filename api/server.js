@@ -34,11 +34,11 @@ app.get("/facilities", async (req, res) => {
     const limit = Number(req.query.limit) || 500;
     const format = req.query.format || "json";
 
-    const cached = getCache(CACHE_KEY);
+    // const cached = getCache(CACHE_KEY);
 
-    if (cached) {
-      return sendFormattedResponse(res, cached, page, limit, format);
-    }
+    // if (cached) {
+    //   return sendFormattedResponse(res, cached, page, limit, format);
+    // }
 
     const response = await axios.get(KOBO_URL, {
       headers: {
