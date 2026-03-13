@@ -20,7 +20,7 @@ app.use(
 app.use(express.json());
 
 const KOBO_URL =
-  "https://kf.kobotoolbox.org/api/v2/assets/axiToevLp9NRbpQvzMBKV3/data/?format=json&attachments=true";
+  "https://kf.kobotoolbox.org/api/v2/assets/axiToevLp9NRbpQvzMBKV3/data/?format=json";
 
 const CACHE_KEY = "facilities";
 const CACHE_TTL = 300; // 5 minutes
@@ -30,24 +30,53 @@ const CACHE_TTL = 300; // 5 minutes
 // facilities?page=1&limit=100
 app.get("/facilities", async (req, res) => {
   try {
-    // const page = Number(req.query.page) || 1;
-    // const limit = Number(req.query.limit) || 500;
-    // const format = req.query.format || "json";
+    const page = Number(req.query.page) || 1;
+    const limit = Number(req.query.limit) || 500;
+    const format = req.query.format || "json";
 
-    // const cached = getCache(CACHE_KEY);
+    const cached = getCache(CACHE_KEY);
 
-    // if (cached) {
-    //   return sendFormattedResponse(res, cached, page, limit, format);
-    // }
+    if (cached) {
+      return sendFormattedResponse(res, cached, page, limit, format);
+    }
 
-    const response = await axios.get(KOBO_URL, {
-      headers: {
-        Authorization: `Token ${process.env.KOBO_TOKEN}`,
-      },
-      timeout: 8000,
-    });
+    // const response = await axios.get(KOBO_URL, {
+    //   headers: {
+    //     Authorization: `Token ${process.env.KOBO_TOKEN}`,
+    //   },
+    //   timeout: 8000,
+    // });
+    async function fetchAllKoboData() {
+      let url = KOBO_URL;
+      let allResults = [];
 
-    const raw = response.data?.results || response.data?.data || [];
+      while (url) {
+        const response = await axios.get(url, {
+          headers: {
+            Authorization: `Token ${process.env.KOBO_TOKEN}`,
+          },
+          timeout: 10000,
+        });
+
+        const data = response.data;
+
+        if (data?.results) {
+          allResults = allResults.concat(data.results);
+          url = data.next;
+        } else if (data?.data) {
+          allResults = allResults.concat(data.data);
+          url = null;
+        } else {
+          url = null;
+        }
+      }
+
+      return allResults;
+    }
+
+    // const raw = response.data?.results || response.data?.data || [];
+
+    const raw = await fetchAllKoboData();
 
     const cleaned = raw.map((rec) => {
       try {
@@ -62,7 +91,7 @@ app.get("/facilities", async (req, res) => {
 
     res.setHeader("Cache-Control", "s-maxage=300, stale-while-revalidate");
 
-    // return sendFormattedResponse(res, cleaned, page, limit, format);
+    return sendFormattedResponse(res, cleaned, page, limit, format);
   } catch (err) {
     console.error("Kobo fetch error:", err.response?.data || err);
 
@@ -72,29 +101,29 @@ app.get("/facilities", async (req, res) => {
   }
 });
 
-// function sendFormattedResponse(res, data, page, limit, format) {
-//   const paginated = paginate(data, page, limit);
+function sendFormattedResponse(res, data, page, limit, format) {
+  const paginated = paginate(data, page, limit);
 
-//   if (format === "geojson") {
-//     const geojson = {
-//       type: "FeatureCollection",
-//       features: paginated.data.map((rec) => ({
-//         type: "Feature",
-//         geometry: {
-//           type: "Point",
-//           coordinates: [rec.lng, rec.lat],
-//         },
-//         properties: {
-//           ...rec,
-//         },
-//       })),
-//     };
+  if (format === "geojson") {
+    const geojson = {
+      type: "FeatureCollection",
+      features: paginated.data.map((rec) => ({
+        type: "Feature",
+        geometry: {
+          type: "Point",
+          coordinates: [rec.lng, rec.lat],
+        },
+        properties: {
+          ...rec,
+        },
+      })),
+    };
 
-//     return res.json(geojson);
-//   }
+    return res.json(geojson);
+  }
 
-//   return res.json(paginated);
-// }
+  return res.json(paginated);
+}
 
 // MEDIA PROXY
 app.get("/media", async (req, res) => {
@@ -129,17 +158,17 @@ app.get("/media", async (req, res) => {
 });
 
 // PAGINATION
-// function paginate(data, page, limit) {
-//   const start = (page - 1) * limit;
-//   const end = page * limit;
+function paginate(data, page, limit) {
+  const start = (page - 1) * limit;
+  const end = page * limit;
 
-//   return {
-//     page,
-//     limit,
-//     total: data.length,
-//     totalPages: Math.ceil(data.length / limit),
-//     data: data.slice(start, end),
-//   };
-// }
+  return {
+    page,
+    limit,
+    total: data.length,
+    totalPages: Math.ceil(data.length / limit),
+    data: data.slice(start, end),
+  };
+}
 
 export default app;
