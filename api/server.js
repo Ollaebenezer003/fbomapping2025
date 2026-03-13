@@ -30,74 +30,27 @@ const CACHE_TTL = 300; // 5 minutes
 // facilities?page=1&limit=100
 app.get("/facilities", async (req, res) => {
   try {
-    const page = Number(req.query.page) || 1;
-    const limit = Number(req.query.limit) || 500;
-    const format = req.query.format || "json";
+    try {
+    const response = await axios.get(
+      "https://kf.kobotoolbox.org/api/v2/assets/axiToevLp9NRbpQvzMBKV3/data/?format=json&attachments=true",
+      {
+        headers: {
+          Authorization: `Token ${process.env.KOBO_TOKEN}`,
+        },
+      },
+    );
 
-    const cached = getCache(CACHE_KEY);
-
-    if (cached) {
-      return sendFormattedResponse(res, cached, page, limit, format);
-    }
-
-    // const response = await axios.get(KOBO_URL, {
-    //   headers: {
-    //     Authorization: `Token ${process.env.KOBO_TOKEN}`,
-    //   },
-    //   timeout: 8000,
-    // });
-    async function fetchAllKoboData() {
-      let url = KOBO_URL;
-      let allResults = [];
-
-      while (url) {
-        const response = await axios.get(url, {
-          headers: {
-            Authorization: `Token ${process.env.KOBO_TOKEN}`,
-          },
-          timeout: 10000,
-        });
-
-        const data = response.data;
-
-        if (data?.results) {
-          allResults = allResults.concat(data.results);
-          url = data.next;
-        } else if (data?.data) {
-          allResults = allResults.concat(data.data);
-          url = null;
-        } else {
-          url = null;
-        }
-      }
-
-      return allResults;
-    }
-
-    // const raw = response.data?.results || response.data?.data || [];
-
-    const raw = await fetchAllKoboData();
+    const raw = response.data?.results || response.data?.data || [];
 
     const cleaned = raw.map((rec) => {
       try {
         return mapRecordChoices(rec);
       } catch (err) {
-        console.error("Mapping error:", err);
-        return rec;
+        console.error("Error mapping record:", err, rec);
+        return rec; // fallback to original record
       }
     });
-
-    setCache(CACHE_KEY, cleaned, CACHE_TTL);
-
-    res.setHeader(
-      "Cache-Control",
-      "public, max-age=0, s-maxage=300, stale-while-revalidate=300",
-    );
-
-    // invalidate cache if the dataset is too small
-    if (cached && cached.length > 500) {
-      return sendFormattedResponse(res, cached, page, limit, format);
-    }
+    res.json(cleaned ?? []);
   } catch (err) {
     console.error("Kobo fetch error:", err.response?.data || err);
 
