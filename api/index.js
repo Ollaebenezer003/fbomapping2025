@@ -50,6 +50,16 @@ async function fetchAllKoboData() {
 // GET FACILITIES
 app.get("/facilities", async (req, res) => {
   try {
+    // Origin detection for API Access
+    const allowedOrigins = ["https://fbomapping2025.vercel.app"];
+
+    const origin = req.headers.origin;
+
+    // Detect unauthorized origins
+    if (!allowedOrigins.includes(origin)) {
+      return res.status(403).json({ message: "Unauthorized Access!" });
+    }
+
     console.log("KOBO TOKEN:", process.env.KOBO_TOKEN ? "Loaded" : "Missing");
     // const response = await axios.get(KOBO_URL, {
     //   headers: {
@@ -90,6 +100,16 @@ app.get("/facilities", async (req, res) => {
 
 app.get("/media", async (req, res) => {
   try {
+    // Origin detection for API Access
+    const allowedOrigins = ["https://fbomapping2025.vercel.app"];
+
+    const origin = req.headers.origin;
+
+    // Detect unauthorized origins
+    if (!allowedOrigins.includes(origin)) {
+      return res.status(403).json({ message: "Unauthorized Access!" });
+    }
+
     const fileUrl = req.query.url;
 
     if (!fileUrl) {
