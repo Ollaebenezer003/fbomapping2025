@@ -16,20 +16,51 @@ app.use(
 app.use(express.json());
 
 const KOBO_URL =
-  "https://kf.kobotoolbox.org/api/v2/assets/axiToevLp9NRbpQvzMBKV3/data/?format=json&attachments=true";
+  "https://kf.kobotoolbox.org/api/v2/assets/axiToevLp9NRbpQvzMBKV3/data/?format=json";
 
-// GET FACILITIES
-app.get("/facilities", async (req, res) => {
-  try {
-    console.log("KOBO TOKEN:", process.env.KOBO_TOKEN ? "Loaded" : "Missing");
-    const response = await axios.get(KOBO_URL, {
+// follow the next pagination link until it becomes null
+async function fetchAllKoboData() {
+  let url = KOBO_URL;
+  let allRecords = [];
+
+  while (url) {
+    const response = await axios.get(url, {
       headers: {
         Authorization: `Token ${process.env.KOBO_TOKEN}`,
       },
       timeout: 10000,
     });
 
-    const raw = response.data?.results || response.data?.data || [];
+    const data = response.data;
+
+    if (data?.results) {
+      allRecords = allRecords.concat(data.results);
+      url = data.next; // go to next page
+    } else if (data?.data) {
+      allRecords = allRecords.concat(data.data);
+      url = null;
+    } else {
+      url = null;
+    }
+  }
+
+  return allRecords;
+}
+
+// GET FACILITIES
+app.get("/facilities", async (req, res) => {
+  try {
+    console.log("KOBO TOKEN:", process.env.KOBO_TOKEN ? "Loaded" : "Missing");
+    // const response = await axios.get(KOBO_URL, {
+    //   headers: {
+    //     Authorization: `Token ${process.env.KOBO_TOKEN}`,
+    //   },
+    //   timeout: 10000,
+    // });
+
+    // const raw = response.data?.results || response.data?.data || [];
+
+    const raw = await fetchAllKoboData();
 
     const cleaned = raw.map((rec) => {
       try {
