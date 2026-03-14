@@ -51,7 +51,10 @@ async function fetchAllKoboData() {
 app.get("/facilities", async (req, res) => {
   try {
     // Origin detection for API Access
-    const allowedOrigins = ["https://fbomapping2025.vercel.app"];
+    const allowedOrigins = [
+      "https://fbomapping2025.vercel.app",
+      "http://localhost:5173",
+    ];
 
     const origin = req.headers.origin;
 
@@ -101,7 +104,10 @@ app.get("/facilities", async (req, res) => {
 app.get("/media", async (req, res) => {
   try {
     // Origin detection for API Access
-    const allowedOrigins = ["https://fbomapping2025.vercel.app"];
+    const allowedOrigins = [
+      "https://fbomapping2025.vercel.app",
+      "http://localhost:5173",
+    ];
 
     const origin = req.headers.origin;
 
