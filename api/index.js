@@ -59,8 +59,13 @@ app.get("/facilities", async (req, res) => {
     const origin = req.headers.origin;
 
     // Detect unauthorized origins
-    if (!allowedOrigins.includes(origin)) {
+    if (origin && !allowedOrigins.includes(origin)) {
       return res.status(403).json({ message: "Unauthorized Access!" });
+    }
+
+    // Detect wrong API Keys in Frontend Calls
+    if (req.query.key !== process.env.API_KEY) {
+      return res.status(403).json({ message: "Unauthorized" });
     }
 
     console.log("KOBO TOKEN:", process.env.KOBO_TOKEN ? "Loaded" : "Missing");
@@ -112,8 +117,13 @@ app.get("/media", async (req, res) => {
     const origin = req.headers.origin;
 
     // Detect unauthorized origins
-    if (!allowedOrigins.includes(origin)) {
+    if (origin && !allowedOrigins.includes(origin)) {
       return res.status(403).json({ message: "Unauthorized Access!" });
+    }
+
+    // Detect wrong API Keys in Frontend Calls
+    if (req.query.key !== process.env.API_KEY) {
+      return res.status(403).json({ message: "Unauthorized" });
     }
 
     const fileUrl = req.query.url;

@@ -16,7 +16,7 @@ export default function useFacilities() {
     queryFn: async () => {
       try {
         const res = await axios.get(
-          "https://fbomapping2025.vercel.app/facilities",
+          `${import.meta.env.VITE_API_URL}/facilities?key=${import.meta.env.VITE_API_KEY}`,
         );
         // ensure res.data is always defined
         return res.data ?? [];
@@ -25,5 +25,9 @@ export default function useFacilities() {
         return []; // return empty array instead of undefined
       }
     },
+
+    staleTime: 1000 * 60 * 10, // 10 minutes
+    cacheTime: 1000 * 60 * 30, // 30 minutes
+    retry: 2,
   });
 }
