@@ -20,7 +20,7 @@ app.use(
 app.use(express.json());
 
 const KOBO_URL =
-  "https://kf.kobotoolbox.org/api/v2/assets/axiToevLp9NRbpQvzMBKV3/data/?format=json";
+  "https://kf.kobotoolbox.org/api/v2/assets/axiToevLp9NRbpQvzMBKV3/data/?format=json&attachments=true";
 
 const CACHE_KEY = "facilities";
 const CACHE_TTL = 300; // 5 minutes
@@ -30,15 +30,22 @@ const CACHE_TTL = 300; // 5 minutes
 // facilities?page=1&limit=100
 app.get("/facilities", async (req, res) => {
   try {
-    try {
-    const response = await axios.get(
-      "https://kf.kobotoolbox.org/api/v2/assets/axiToevLp9NRbpQvzMBKV3/data/?format=json&attachments=true",
-      {
-        headers: {
-          Authorization: `Token ${process.env.KOBO_TOKEN}`,
-        },
+    const page = Number(req.query.page) || 1;
+    const limit = Number(req.query.limit) || 500;
+    const format = req.query.format || "json";
+
+    const cached = getCache(CACHE_KEY);
+
+    if (cached) {
+      return sendFormattedResponse(res, cached, page, limit, format);
+    }
+
+    const response = await axios.get(KOBO_URL, {
+      headers: {
+        Authorization: `Token ${process.env.KOBO_TOKEN}`,
       },
-    );
+      timeout: 8000,
+    });
 
     const raw = response.data?.results || response.data?.data || [];
 
@@ -46,11 +53,16 @@ app.get("/facilities", async (req, res) => {
       try {
         return mapRecordChoices(rec);
       } catch (err) {
-        console.error("Error mapping record:", err, rec);
-        return rec; // fallback to original record
+        console.error("Mapping error:", err);
+        return rec;
       }
     });
-    res.json(cleaned ?? []);
+
+    setCache(CACHE_KEY, cleaned, CACHE_TTL);
+
+    res.setHeader("Cache-Control", "s-maxage=300, stale-while-revalidate");
+
+    return sendFormattedResponse(res, cleaned, page, limit, format);
   } catch (err) {
     console.error("Kobo fetch error:", err.response?.data || err);
 

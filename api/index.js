@@ -40,7 +40,10 @@ app.get("/facilities", async (req, res) => {
       }
     });
 
-    res.setHeader("Cache-Control", "s-maxage=300, stale-while-revalidate");
+    res.setHeader(
+      "Cache-Control",
+      "public, max-age=0, s-maxage=300, stale-while-revalidate=300",
+    );
 
     return res.json(cleaned ?? []);
   } catch (err) {
