@@ -5,6 +5,12 @@ import { CgSpinner } from "react-icons/cg";
 function ImageSection({ attachments, name }) {
   const [showLoader, setShowLoader] = useState(true);
 
+  const baseUrl = import.meta.env.VITE_API_URL;
+  const apiKey = import.meta.env.VITE_API_KEY;
+
+  const getMediaUrl = (url) =>
+    `${baseUrl}/media?url=${encodeURIComponent(url)}&key=${apiKey}`;
+
   // Hide loader after 4 seconds
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -28,25 +34,19 @@ function ImageSection({ attachments, name }) {
         style={{ opacity: showLoader ? 0.3 : 1 }}
       >
         <ImagePreview
-          src={`https://fbomapping2025.vercel.app/media?url=${encodeURIComponent(
-            attachments[0].download_small_url,
-          )}`}
+          src={getMediaUrl(attachments[0].download_small_url)}
           alt={name}
           className="modalImage"
         />
 
         <ImagePreview
-          src={`https://fbomapping2025.vercel.app/media?url=${encodeURIComponent(
-            attachments[0].download_medium_url,
-          )}`}
+          src={getMediaUrl(attachments[0].download_medium_url)}
           alt={name}
           className="modalImage"
         />
 
         <ImagePreview
-          src={`https://fbomapping2025.vercel.app/media?url=${encodeURIComponent(
-            attachments[0].download_large_url,
-          )}`}
+          src={getMediaUrl(attachments[0].download_large_url)}
           alt={name}
           className="modalImage"
         />

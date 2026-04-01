@@ -116,14 +116,10 @@ app.get("/media", async (req, res) => {
 
     const origin = req.headers.origin;
 
-    // Detect unauthorized origins
+    // Allow requests with no origin (important for images/CDN)
     if (origin && !allowedOrigins.includes(origin)) {
+      console.warn("Blocked media request from:", origin);
       return res.status(403).json({ message: "Unauthorized Access!" });
-    }
-
-    // Detect wrong API Keys in Frontend Calls
-    if (req.query.key !== process.env.API_KEY) {
-      return res.status(403).json({ message: "Unauthorized" });
     }
 
     const fileUrl = req.query.url;
@@ -141,7 +137,7 @@ app.get("/media", async (req, res) => {
     });
 
     res.setHeader("Content-Type", response.headers["content-type"]);
-    res.setHeader("Cache-Control", "public, max-age=86400");
+    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
 
     return res.send(response.data);
   } catch (err) {
