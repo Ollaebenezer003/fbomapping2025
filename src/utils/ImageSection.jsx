@@ -1,15 +1,16 @@
 import { useState, useEffect } from "react";
 import ImagePreview from "./ImagePreview";
 import { CgSpinner } from "react-icons/cg";
+import { API_BASE } from "./apiBase";
+import { buildMediaSrc, pickDisplayAttachment } from "./mediaUrl";
 
-function ImageSection({ attachments, name }) {
+function ImageSection({ attachments, name, submissionId }) {
   const [showLoader, setShowLoader] = useState(true);
 
-  const baseUrl = import.meta.env.VITE_API_URL;
-  const apiKey = import.meta.env.VITE_API_KEY;
-
-  const getMediaUrl = (url) =>
-    `${baseUrl}/media?url=${encodeURIComponent(url)}&key=${apiKey}`;
+  // Images are requested by identifiers only; the server builds the Kobo URL.
+  const attachment = pickDisplayAttachment(submissionId, attachments);
+  const getMediaUrl = (size) =>
+    buildMediaSrc(submissionId, attachment, size, API_BASE);
 
   // Hide loader after 4 seconds
   useEffect(() => {
@@ -19,6 +20,8 @@ function ImageSection({ attachments, name }) {
 
     return () => clearTimeout(timer);
   }, []);
+
+  if (!attachment) return null;
 
   return (
     <section className="modalImageSection" style={{ position: "relative" }}>
@@ -34,19 +37,19 @@ function ImageSection({ attachments, name }) {
         style={{ opacity: showLoader ? 0.3 : 1 }}
       >
         <ImagePreview
-          src={getMediaUrl(attachments[0].download_small_url)}
+          src={getMediaUrl("small")}
           alt={name}
           className="modalImage"
         />
 
         <ImagePreview
-          src={getMediaUrl(attachments[0].download_medium_url)}
+          src={getMediaUrl("medium")}
           alt={name}
           className="modalImage"
         />
 
         <ImagePreview
-          src={getMediaUrl(attachments[0].download_large_url)}
+          src={getMediaUrl("large")}
           alt={name}
           className="modalImage"
         />

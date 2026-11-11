@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import axios from "axios";
+import { API_BASE } from "../utils/apiBase";
 
 export default function useFacilities() {
   // return useQuery({
@@ -16,7 +17,7 @@ export default function useFacilities() {
     queryFn: async () => {
       try {
         const res = await axios.get(
-          `${import.meta.env.VITE_API_URL}/facilities?key=${import.meta.env.VITE_API_KEY}`,
+          `${API_BASE}/facilities?key=${import.meta.env.VITE_API_KEY}`,
         );
         // ensure res.data is always defined
         return res.data ?? [];

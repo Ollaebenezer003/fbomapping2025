@@ -159,7 +159,11 @@ export default function FacilityModal({ open, onClose, facility }) {
           </section>
         )} */}
         {facility._attachments?.length > 0 && (
-          <ImageSection attachments={facility._attachments} name={name} />
+          <ImageSection
+            attachments={facility._attachments}
+            name={name}
+            submissionId={facility._id}
+          />
         )}
 
         <section className="modalSection"></section>

@@ -9,6 +9,7 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
+    "test:security": "node --test --test-timeout=60000 \"tests/security/*.test.js\"",
     "server": "cd ../backend && nodemon server.js"
   },
   "dependencies": {

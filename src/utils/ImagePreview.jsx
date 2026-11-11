@@ -4,12 +4,21 @@ import { FaEye } from "react-icons/fa";
 
 const ImagePreview = ({ src, alt }) => {
   const [open, setOpen] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  // Hide the thumbnail when the image is missing or unavailable.
+  if (!src || failed) return null;
 
   return (
     <>
       {/* Thumbnail with hover preview overlay */}
       <div className="imageWrapper" onClick={() => setOpen(true)}>
-        <img src={src} alt={alt} className="modalImage" />
+        <img
+          src={src}
+          alt={alt}
+          className="modalImage"
+          onError={() => setFailed(true)}
+        />
 
         <div className="imageOverlay">
           <div className="imageOverlayContent">
