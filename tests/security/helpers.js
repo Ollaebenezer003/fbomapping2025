@@ -14,7 +14,7 @@ import { KOBO_DATA_PATH, KOBO_ORIGIN } from "../../api/_lib/kobo.js";
 export const TOKEN = "SENTINEL_KOBO_TOKEN_7f3a9c51e2";
 export const API_KEY = "test-public-key";
 
-// Explicit local opt-in for the provisional deletion rule (D31 H-1). Tests
+// Explicit local opt-in for the unapproved deletion policy (D31 H-1). Tests
 // that need authorised photos set it; every other environment is blocked.
 export const LOCAL_ENV = Object.freeze({ D31_LOCAL_PROVISIONAL: "1" });
 

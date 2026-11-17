@@ -16,10 +16,11 @@
 
 import { fetchAllKoboData } from "./kobo.js";
 import {
-  DELETION_RULE_PROVISIONAL,
+  DELETION_POLICY_APPROVED,
+  hasDeletionIndicator,
+  hasRecordDeletionIndicator,
   isDeletionRuleReleaseBlocked,
-  isProvisionallyDeleted,
-} from "./provisionalDeletion.js";
+} from "./deletionPolicy.js";
 
 // Owner-approved values (D31, local implementation approval 2026-11-17).
 export const INDEX_MAX_AGE_MS = 300_000;
@@ -96,21 +97,21 @@ export function isPublicRecord(record) {
 }
 
 /**
- * Policy for the predicate. While the deletion rule is provisional the
+ * Policy for the predicate. While the deletion policy is not approved the
  * policy is blocked in every environment, so no attachment is authorised.
  * Only a local run with `D31_LOCAL_PROVISIONAL=1` and no deployment
- * indicator is unblocked (provisionalDeletion.js).
+ * indicator is unblocked (deletionPolicy.js).
  */
 export function createAttachmentPolicy({
   env = {},
   photoQuestionXpaths = PHOTO_QUESTION_XPATHS,
-  isDeleted = isProvisionallyDeleted,
-  deletionRuleProvisional = DELETION_RULE_PROVISIONAL,
+  isDeleted = hasDeletionIndicator,
+  deletionPolicyApproved = DELETION_POLICY_APPROVED,
 } = {}) {
   return Object.freeze({
     photoQuestionXpaths: new Set(photoQuestionXpaths),
     isDeleted,
-    releaseBlocked: isDeletionRuleReleaseBlocked(env, deletionRuleProvisional),
+    releaseBlocked: isDeletionRuleReleaseBlocked(env, deletionPolicyApproved),
   });
 }
 
@@ -122,16 +123,50 @@ export function isAuthorisedAttachment(record, attachment, policy) {
   try {
     if (!policy || policy.releaseBlocked) return false;
     if (!isPublicRecord(record)) return false; // A-1 and record ID
+    if (hasRecordDeletionIndicator(record)) return false; // A-5 (record)
     if (!Array.isArray(record._attachments) || !record._attachments.includes(attachment)) return false; // A-2
     if (!isPlainObject(attachment)) return false;
     const type = attachment.mimetype;
     if (typeof type !== "string" || !type.trim().toLowerCase().startsWith("image/")) return false; // A-3
     const xpath = attachment.question_xpath;
     if (typeof xpath !== "string" || !policy.photoQuestionXpaths.has(xpath)) return false; // A-4
-    if (policy.isDeleted(attachment) !== false) return false; // A-5 (provisional)
+    if (policy.isDeleted(attachment) !== false) return false; // A-5 (attachment)
     return attachmentIdentifiers(attachment) !== null; // A-6
   } catch {
     return false;
+  }
+}
+
+// Every identifier-like value of an attachment, valid or not. Used only to
+// find identifiers that are ambiguous inside one record.
+function claimedIdentifiers(attachment) {
+  if (!isPlainObject(attachment)) return [];
+  const out = [];
+  if (typeof attachment.uid === "string") out.push(attachment.uid);
+  if (typeof attachment.id === "number" || typeof attachment.id === "string") out.push(String(attachment.id));
+  return out;
+}
+
+/**
+ * The authorised attachments of one record. Used by both the index and the
+ * `/facilities` projection, so both list the same IDs. An authorised
+ * attachment is dropped when one of its identifiers is on more than one
+ * attachment of the record, also when the other entry is refused (for
+ * example a deleted one). Kobo serves `(sid, aid)` without telling which
+ * entry it used, so such an identifier is ambiguous.
+ */
+export function authorisedAttachmentsOf(record, policy) {
+  try {
+    if (!isPlainObject(record) || !Array.isArray(record._attachments)) return [];
+    const uses = new Map();
+    for (const attachment of record._attachments) {
+      for (const id of claimedIdentifiers(attachment)) uses.set(id, (uses.get(id) ?? 0) + 1);
+    }
+    return record._attachments.filter(
+      (a) => isAuthorisedAttachment(record, a, policy) && attachmentIdentifiers(a).every((id) => uses.get(id) === 1),
+    );
+  } catch {
+    return [];
   }
 }
 
@@ -140,9 +175,7 @@ export function isAuthorisedAttachment(record, attachment, policy) {
  * `id` and `mimetype`. No URL, file name or other key reaches the browser.
  */
 export function projectAuthorisedAttachments(record, policy) {
-  if (!isPlainObject(record) || !Array.isArray(record._attachments)) return [];
-  return record._attachments
-    .filter((a) => isAuthorisedAttachment(record, a, policy))
+  return authorisedAttachmentsOf(record, policy)
     .map((a) => {
       const out = {};
       if (hasValue(a, "uid")) out.uid = a.uid;
@@ -182,8 +215,7 @@ export function buildIndexFromRecords(records, readStartedAt, policy) {
     if (!isPlainObject(record)) throw codeError("malformed_record");
     if (!Array.isArray(record._attachments)) continue;
     const sid = recordSubmissionId(record);
-    for (const attachment of record._attachments) {
-      if (!isAuthorisedAttachment(record, attachment, policy)) continue;
+    for (const attachment of authorisedAttachmentsOf(record, policy)) {
       let set = entries.get(sid);
       if (!set) entries.set(sid, (set = new Set()));
       for (const id of attachmentIdentifiers(attachment)) set.add(id);

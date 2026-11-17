@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { KOBO_ASSET_UID, KOBO_DATA_PATH, KOBO_ORIGIN } from "../../api/_lib/kobo.js";
 import { INDEX_MAX_AGE_MS, INDEX_RETRY_BACKOFF_MS } from "../../api/_lib/attachmentIndex.js";
-import { DEPLOYMENT_INDICATORS } from "../../api/_lib/provisionalDeletion.js";
+import { DEPLOYMENT_INDICATORS } from "../../api/_lib/deletionPolicy.js";
 import { createGuardedGet } from "../../api/_lib/safeHttp.js";
 import {
   API_KEY, FACILITY_XPATH, JPEG, LOCAL_ENV, ORGANISATION_XPATH, TOKEN,
@@ -358,6 +358,79 @@ test("D31-T13 and D31-T24: deletion and restoration simulations through /media",
       assertNoStoreError(await s410.request(idsPath(SID, UID_1)), 404);
     } finally {
       await s410.close();
+    }
+  } finally {
+    await s.close();
+  }
+});
+
+test("OPS-070: Production deletion policy through /media and /facilities with mocked Kobo responses", async () => {
+  const PROD = Object.freeze({ KOBO_TOKEN: TOKEN, API_KEY, VERCEL: "1", VERCEL_ENV: "production" });
+  const mutate = (fn) =>
+    records().map((r) => (r._id === Number(SID) ? { ...r, _attachments: r._attachments.map(fn) } : r));
+
+  // Not approved: Production serves no photo and lists none, with no Kobo request.
+  const blocked = await session({ env: PROD });
+  try {
+    assertNoStoreError(await blocked.request(idsPath(SID, UID_1)), 503);
+    assert.equal(blocked.stub.calls.length, 0);
+  } finally {
+    await blocked.close();
+  }
+
+  // Approved (simulated by the code constant): the same policy applies.
+  const s = await session({ env: PROD, policyOptions: { deletionPolicyApproved: true } });
+  try {
+    assert.equal((await s.request(idsPath(SID, UID_1, "large"))).status, 200, "active photo served");
+    assert.equal((await s.request(idsPath(SID, UID_3))).status, 200, "is_deleted=false with membership is served");
+    assertNoStoreError(await s.request(idsPath(SID, MARKED)), 404);
+    assertNoStoreError(await s.request(idsPath(SID, "18")), 404);
+
+    const steps = [
+      ["explicit marker", () => mutate((a) => (a.uid === UID_1 ? { ...a, is_deleted: true } : a))],
+      ["string marker", () => mutate((a) => (a.uid === UID_1 ? { ...a, is_deleted: "false" } : a))],
+      ["null marker", () => mutate((a) => (a.uid === UID_1 ? { ...a, is_deleted: null } : a))],
+      ["other deletion key", () => mutate((a) => (a.uid === UID_1 ? { ...a, deleted_at: "2026-11-17T00:00:00Z" } : a))],
+      ["false marker with other key", () => mutate((a) => (a.uid === UID_1 ? { ...a, is_deleted: false, in_trash: false } : a))],
+      ["duplicate uid on a deleted entry", () => [
+        ...records().map((r) => (r._id === Number(SID) ? { ...r, _attachments: [...r._attachments, photo(UID_1, { id: 99, is_deleted: true })] } : r)),
+      ]],
+      ["record deletion key", () => records().map((r) => (r._id === Number(SID) ? { ...r, _deleted_at: "x" } : r))],
+      ["missing from the fresh read", () => mutate((a) => a).map((r) =>
+        r._id === Number(SID) ? { ...r, _attachments: r._attachments.filter((a) => a.uid !== UID_1) } : r)],
+    ];
+    for (const [label, build] of steps) {
+      s.stub.state.records = build();
+      s.clock.advance(INDEX_MAX_AGE_MS + 1);
+      const images = s.stub.imageCalls.length;
+      for (const aid of [UID_1, "11"]) assertNoStoreError(await s.request(idsPath(SID, aid, "medium")), 404);
+      assertNoStoreError(await s.request(legacyPath(SID, UID_1)), 404);
+      assert.equal(s.stub.imageCalls.length, images, `${label}: no image request`);
+      const body = JSON.parse((await s.request(`/facilities?key=${API_KEY}`)).body.toString());
+      const listed = body.find((r) => r._id === Number(SID))._attachments.map((a) => a.uid);
+      assert.ok(!listed.includes(UID_1), `${label}: not listed`);
+      // Control: restore, then the photo is served again.
+      s.stub.state.records = records();
+      s.clock.advance(INDEX_MAX_AGE_MS + 1);
+      assert.equal((await s.request(idsPath(SID, UID_1))).status, 200, `${label}: restored control`);
+    }
+
+    // An expired index is never used: a failed refresh gives 503 with no image request.
+    s.stub.state.records = "not an array";
+    s.clock.advance(INDEX_MAX_AGE_MS + 1);
+    const images = s.stub.imageCalls.length;
+    assertNoStoreError(await s.request(idsPath(SID, UID_1)), 503);
+    assertNoStoreError(await s.request(idsPath(SID, UID_2)), 503);
+    assert.equal(s.stub.imageCalls.length, images);
+
+    // No credential in any response or log line.
+    for (const res of s.responses) assert.ok(!res.body.toString().includes(TOKEN));
+    for (const res of s.responses) assert.ok(!JSON.stringify(res.headers).includes(TOKEN));
+    assert.ok(!s.lines.join("\n").includes(TOKEN));
+    // The token is sent only in the Authorization header of Kobo requests.
+    for (const call of s.stub.calls) {
+      assert.ok(!call.url.includes(TOKEN));
+      assert.equal(call.opts.headers?.Authorization, `Token ${TOKEN}`);
     }
   } finally {
     await s.close();

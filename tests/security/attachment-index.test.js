@@ -11,6 +11,7 @@ import {
   INDEX_RETRY_BACKOFF_MS,
   PHOTO_QUESTION_XPATHS,
   attachmentIdentifiers,
+  authorisedAttachmentsOf,
   buildIndexFromRecords,
   createAttachmentIndex,
   createAttachmentPolicy,
@@ -18,13 +19,14 @@ import {
   projectAuthorisedAttachments,
 } from "../../api/_lib/attachmentIndex.js";
 import {
-  DELETION_RULE_PROVISIONAL,
-  DELETION_RULE_STATUS,
+  DELETION_POLICY_APPROVED,
+  DELETION_POLICY_ID,
   DEPLOYMENT_INDICATORS,
+  hasDeletionIndicator,
+  hasRecordDeletionIndicator,
   isDeletionRuleReleaseBlocked,
   isLocalProvisionalAllowed,
-  isProvisionallyDeleted,
-} from "../../api/_lib/provisionalDeletion.js";
+} from "../../api/_lib/deletionPolicy.js";
 import { KOBO_DATA_URL, KOBO_DATA_PATH, KOBO_ORIGIN } from "../../api/_lib/kobo.js";
 import { createGuardedGet } from "../../api/_lib/safeHttp.js";
 import {
@@ -129,7 +131,7 @@ test("D31-T3 (predicate): approved and rejected attachments", () => {
   assert.equal(isAuthorisedAttachment({ _id: 7, _attachments: [att] }, att, null), false, "no policy");
   assert.equal(isAuthorisedAttachment({ _id: 7, _attachments: [null] }, null, POLICY), false);
 
-  // Delete marker (provisional rule).
+  // Delete marker (A-5).
   assert.equal(ok(photo(UID_A, { is_deleted: false })), true);
   assert.equal(ok(photo(UID_A, { is_deleted: true })), false);
 
@@ -150,29 +152,97 @@ test("attachment identifiers: uid and numeric id are both indexed", () => {
   assert.equal(attachmentIdentifiers({}), null);
 });
 
-// ---- Provisional deletion check (isolated, fail closed) -------------------
+// ---- Deletion policy RC9_METADATA_1 (isolated, fail closed) ---------------
 
-test("provisional deletion check: only RC-9 observed states pass; ambiguous states fail closed", () => {
-  assert.equal(DELETION_RULE_PROVISIONAL, true);
-  assert.equal(DELETION_RULE_STATUS, "PROVISIONAL_PENDING_RC12");
+const DELETION_KEYS = ["deleted_at", "date_deleted", "delete_status", "deleted", "isDeleted", "in_trash", "trashed_at", "removed", "purged", "discarded", "IS_DELETED"];
+
+test("OPS-070 deletion policy: only RC-9 observed states pass; explicit and ambiguous states fail closed", () => {
+  assert.equal(DELETION_POLICY_ID, "RC9_METADATA_1");
   // Observed in RC-9: field absent, or exactly false.
-  assert.equal(isProvisionallyDeleted({ uid: UID_A }), false);
-  assert.equal(isProvisionallyDeleted({ uid: UID_A, is_deleted: false }), false);
+  assert.equal(hasDeletionIndicator({ uid: UID_A }), false);
+  assert.equal(hasDeletionIndicator({ uid: UID_A, is_deleted: false }), false);
   // Positive or ambiguous values.
   for (const value of [true, "true", "false", "False", 0, 1, null, "", "yes", {}, []]) {
-    assert.equal(isProvisionallyDeleted({ is_deleted: value }), true, `is_deleted=${JSON.stringify(value)}`);
+    assert.equal(hasDeletionIndicator({ is_deleted: value }), true, `is_deleted=${JSON.stringify(value)}`);
   }
+  // is_deleted=false never overrides another deletion-like key.
+  assert.equal(hasDeletionIndicator({ is_deleted: false, deleted_at: null }), true);
   // Other deletion-like keys were not evidenced: any presence fails closed.
-  for (const key of ["deleted_at", "date_deleted", "delete_status", "deleted", "isDeleted", "in_trash", "trashed_at", "removed", "purged", "discarded"]) {
+  for (const key of DELETION_KEYS) {
     for (const value of [null, false, "", "x", true]) {
-      assert.equal(isProvisionallyDeleted({ [key]: value }), true, `${key}=${JSON.stringify(value)}`);
+      assert.equal(hasDeletionIndicator({ [key]: value }), true, `${key}=${JSON.stringify(value)}`);
     }
   }
   // Not an attachment object.
-  for (const value of [null, undefined, "x", 1, []]) assert.equal(isProvisionallyDeleted(value), true);
+  for (const value of [null, undefined, "x", 1, []]) assert.equal(hasDeletionIndicator(value), true);
 });
 
-test("H-1 and M-1: provisional deletion rule is blocked by default in every environment", () => {
+test("OPS-070 deletion policy: record system keys that refer to deletion refuse every photo of the record", () => {
+  assert.equal(hasRecordDeletionIndicator({ _id: 1, _status: "submitted_via_web", _attachments: [] }), false);
+  // Form question names (no leading underscore) do not block photos.
+  assert.equal(hasRecordDeletionIndicator({ _id: 1, "group/reason_removed": "x", deleted_items: "y" }), false);
+  for (const key of ["_deleted", "_is_deleted", "_deleted_at", "_trashed", "_removed", "__deleted"]) {
+    for (const value of [null, false, "", true]) {
+      const rec = { ...recordA(), [key]: value };
+      assert.equal(hasRecordDeletionIndicator(rec), true, `${key}=${JSON.stringify(value)}`);
+      assert.equal(isAuthorisedAttachment(rec, rec._attachments[0], POLICY), false, key);
+      assert.deepEqual(projectAuthorisedAttachments(rec, POLICY), [], key);
+      assert.equal(buildIndexFromRecords([rec], 0, POLICY).attachmentCount, 0, key);
+    }
+  }
+  for (const value of [null, [], "x"]) assert.equal(hasRecordDeletionIndicator(value), true);
+});
+
+test("OPS-070 deletion policy: ambiguous identifiers in one record are refused in the index and the projection", () => {
+  const cases = [
+    ["same uid on a deleted entry", [photo(UID_A, { id: 1 }), photo(UID_A, { id: 2, is_deleted: true })], [UID_A, "1", "2"]],
+    ["same numeric id on a deleted entry", [photo(UID_A, { id: 1 }), photo(UID_B, { id: 1, deleted_at: "x" })], [UID_A, UID_B, "1"]],
+    ["same uid twice, both active", [photo(UID_A, { id: 1 }), photo(UID_A, { id: 2 })], [UID_A, "1", "2"]],
+    ["number and string forms of one id", [photo(UID_A, { id: 1 }), photo(UID_B, { id: "1" })], [UID_A, UID_B, "1"]],
+    ["same uid on a non-photo entry", [photo(UID_A, { id: 1 }), photo(UID_A, { id: 5, question_xpath: "other/q" })], [UID_A, "1", "5"]],
+  ];
+  for (const [label, attachments, refusedIds] of cases) {
+    const rec = { _id: 9, _attachments: attachments };
+    const idx = buildIndexFromRecords([rec], 0, POLICY);
+    for (const aid of refusedIds) assert.equal(idx.has("9", aid), false, `${label}: ${aid}`);
+    assert.equal(idx.attachmentCount, 0, label);
+    assert.deepEqual(projectAuthorisedAttachments(rec, POLICY), [], label);
+  }
+  // Control: an unrelated active attachment in the same record stays authorised.
+  const rec = { _id: 9, _attachments: [photo(UID_A, { id: 1 }), photo(UID_A, { id: 2, is_deleted: true }), photo(UID_C, { id: 3 })] };
+  assert.deepEqual(buildIndexFromRecords([rec], 0, POLICY).ids(), ["9/3", `9/${UID_C}`]);
+  assert.deepEqual(authorisedAttachmentsOf(rec, POLICY), [rec._attachments[2]]);
+  assert.deepEqual(projectAuthorisedAttachments(rec, POLICY), [{ uid: UID_C, id: 3, mimetype: "image/jpeg" }]);
+});
+
+test("OPS-070: the deletion policy is not approved for deployed use; only a code constant approves it", () => {
+  assert.equal(DELETION_POLICY_APPROVED, false, "owner approval is not recorded in code");
+  // Production, Preview and unknown environments are blocked by default.
+  for (const env of [{}, { VERCEL_ENV: "production" }, { VERCEL_ENV: "preview" }, { VERCEL: "1" }]) {
+    assert.equal(createAttachmentPolicy({ env }).releaseBlocked, true, JSON.stringify(env));
+  }
+  // No environment variable approves it, also with a guessed flag name.
+  for (const env of [
+    { VERCEL_ENV: "production", D31_LOCAL_PROVISIONAL: "1" },
+    { VERCEL_ENV: "production", DELETION_POLICY_APPROVED: "true" },
+    { VERCEL_ENV: "production", D31_DELETION_POLICY_APPROVED: "1" },
+  ]) {
+    assert.equal(createAttachmentPolicy({ env }).releaseBlocked, true, JSON.stringify(env));
+  }
+  // Only the exact value true counts as approval.
+  for (const value of ["true", 1, "1", {}, null, undefined]) {
+    assert.equal(isDeletionRuleReleaseBlocked({ VERCEL_ENV: "production" }, value), true, String(value));
+  }
+  // After approval the same policy (not a separate mode) applies everywhere.
+  const approved = createAttachmentPolicy({ env: { VERCEL_ENV: "production" }, deletionPolicyApproved: true });
+  assert.equal(approved.releaseBlocked, false);
+  assert.equal(approved.isDeleted, hasDeletionIndicator);
+  assert.equal(createAttachmentPolicy({ env: LOCAL_ENV }).isDeleted, hasDeletionIndicator, "local runs use the same check");
+  const marked = { _id: 7, _attachments: [photo(UID_A, { is_deleted: true }), photo(UID_B, { is_deleted: false })] };
+  assert.deepEqual(projectAuthorisedAttachments(marked, approved), [{ uid: UID_B, mimetype: "image/jpeg" }]);
+});
+
+test("H-1 and M-1: the unapproved deletion policy is blocked by default in every environment", () => {
   const blockedEnvs = [
     ["no environment variables", {}],
     ["null environment", null],
@@ -212,9 +282,9 @@ test("H-1 and M-1: provisional deletion rule is blocked by default in every envi
     assert.equal(isLocalProvisionalAllowed(env), true, JSON.stringify(env));
     assert.equal(createAttachmentPolicy({ env }).releaseBlocked, false);
   }
-  // An approved (non-provisional) rule is not blocked. This is a code
+  // An approved policy is not blocked. This is a code
   // constant, not an environment flag: there is no Production bypass flag.
-  assert.equal(isDeletionRuleReleaseBlocked({ VERCEL_ENV: "production" }, false), false);
+  assert.equal(isDeletionRuleReleaseBlocked({ VERCEL_ENV: "production" }, true), false);
   // The default policy (no env argument) is blocked.
   assert.equal(createAttachmentPolicy().releaseBlocked, true);
 });
