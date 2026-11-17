@@ -9,10 +9,10 @@ import {
   fetchAllKoboData,
 } from "../../api/_lib/kobo.js";
 import { mapRecordChoices } from "../../api/_lib/choiceMapper.js";
-import { API_KEY, TOKEN, captureLog, fakeGet, fetchAll, startApp } from "./helpers.js";
+import { API_KEY, LOCAL_ENV, TOKEN, captureLog, fakeGet, fetchAll, startApp } from "./helpers.js";
 
 const BASE = `https://kf.kobotoolbox.org/api/v2/assets/${KOBO_ASSET_UID}/data/`;
-const ENV = Object.freeze({ KOBO_TOKEN: TOKEN, API_KEY });
+const ENV = Object.freeze({ KOBO_TOKEN: TOKEN, API_KEY, ...LOCAL_ENV });
 const jsonPage = (obj) => ({ status: 200, headers: { "content-type": "application/json" }, body: Buffer.from(JSON.stringify(obj)) });
 
 // Synthetic records only (no production data).
@@ -241,7 +241,7 @@ test("existing key and origin checks are preserved and short-circuit before Kobo
 });
 
 test("missing Kobo token fails closed without an upstream request", async () => {
-  const { res, calls } = await run(() => jsonPage({ results: [] }), { env: { API_KEY } });
+  const { res, calls } = await run(() => jsonPage({ results: [] }), { env: { API_KEY, ...LOCAL_ENV } });
   assert.equal(res.status, 500);
   assert.equal(calls.length, 0);
 });

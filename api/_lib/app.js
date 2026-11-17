@@ -5,6 +5,7 @@ import { mapRecordChoices } from "./choiceMapper.js";
 import { fetchAllKoboData } from "./kobo.js";
 import { createMediaHandler } from "./media.js";
 import {
+  PHOTO_QUESTION_XPATHS,
   createAttachmentIndex,
   createAttachmentPolicy,
   projectAuthorisedAttachments,
@@ -20,6 +21,31 @@ function safeCode(value) {
 
 function hasOwn(obj, key) {
   return Object.prototype.hasOwnProperty.call(obj, key);
+}
+
+// Image-question answers hold raw Kobo file names. No front-end function
+// uses them (images are addressed by `_attachments` IDs), so /facilities
+// does not send them (D31 L-4).
+const IMAGE_ANSWER_KEYS = Object.freeze([...PHOTO_QUESTION_XPATHS]);
+
+function withoutImageAnswers(record) {
+  if (record === null || typeof record !== "object" || Array.isArray(record)) return record;
+  if (!IMAGE_ANSWER_KEYS.some((key) => hasOwn(record, key))) return record;
+  const out = { ...record };
+  for (const key of IMAGE_ANSWER_KEYS) delete out[key];
+  return out;
+}
+
+/**
+ * API key check for /facilities (D31 L-5). A missing or empty `API_KEY`
+ * never disables the check: the route fails closed with 503 in every
+ * environment. Local testing sets `API_KEY` explicitly. The key value is
+ * never logged or returned.
+ */
+export function checkApiKey(provided, configured) {
+  if (typeof configured !== "string" || configured.length === 0) return "not_configured";
+  if (typeof provided !== "string" || provided !== configured) return "invalid";
+  return "ok";
 }
 
 /**
@@ -69,8 +95,13 @@ export function createApp({
         return res.status(403).json({ message: "Unauthorized Access!" });
       }
 
-      // Detect wrong API Keys in Frontend Calls
-      if (req.query.key !== env.API_KEY) {
+      // Detect wrong API Keys in Frontend Calls. A missing API_KEY fails closed.
+      const keyState = checkApiKey(req.query.key, env.API_KEY);
+      if (keyState === "not_configured") {
+        log.error("[facilities] config_error code=missing_api_key");
+        return res.status(503).set("Cache-Control", "no-store").json({ error: "Service temporarily unavailable" });
+      }
+      if (keyState !== "ok") {
         return res.status(403).json({ message: "Unauthorized" });
       }
 
@@ -90,6 +121,7 @@ export function createApp({
           log.error("[facilities] record_mapping_error");
           mapped = rec;
         }
+        mapped = withoutImageAnswers(mapped);
         if (mapped === null || typeof mapped !== "object" || !hasOwn(mapped, "_attachments")) return mapped;
         return { ...mapped, _attachments: projectAuthorisedAttachments(rec, policy) };
       });

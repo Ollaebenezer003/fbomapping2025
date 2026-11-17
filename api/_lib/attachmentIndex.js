@@ -96,9 +96,10 @@ export function isPublicRecord(record) {
 }
 
 /**
- * Policy for the predicate. In a Vercel Production environment the policy
- * is blocked while the deletion rule is provisional, so no attachment is
- * authorised there.
+ * Policy for the predicate. While the deletion rule is provisional the
+ * policy is blocked in every environment, so no attachment is authorised.
+ * Only a local run with `D31_LOCAL_PROVISIONAL=1` and no deployment
+ * indicator is unblocked (provisionalDeletion.js).
  */
 export function createAttachmentPolicy({
   env = {},
@@ -267,6 +268,14 @@ export function createAttachmentIndex({
       if (build.settled) return;
       build.settled = true;
       if (inflight === build) inflight = null;
+      // A newer fresh index was installed while this build was pending
+      // (for example by a /facilities offer). Waiters get that index and no
+      // backoff starts. The failed result itself is never installed.
+      if (isFresh(current, now())) {
+        log.warn(`[index] build_failed_fresh_index_used code=${safeCode(code)}`);
+        resolveWaiters(current);
+        return;
+      }
       lastFailureAt = now();
       log.warn(`[index] build_failed code=${safeCode(code)}`);
       rejectWaiters(new IndexUnavailableError(safeCode(code)));
@@ -305,6 +314,13 @@ export function createAttachmentIndex({
             return;
           }
           install(idx, gen);
+          // The result must satisfy the freshness rule now. If it does not
+          // (for example the clock moved back), it is a failed build and the
+          // backoff starts. There is no grace period.
+          if (!isFresh(current, now())) {
+            fail("stale_result");
+            return;
+          }
           build.settled = true;
           if (inflight === build) inflight = null;
           lastFailureAt = null;

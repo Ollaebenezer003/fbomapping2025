@@ -9,12 +9,15 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { KOBO_ASSET_UID, KOBO_DATA_PATH, KOBO_ORIGIN } from "../../api/_lib/kobo.js";
 import { INDEX_MAX_AGE_MS, INDEX_RETRY_BACKOFF_MS } from "../../api/_lib/attachmentIndex.js";
+import { DEPLOYMENT_INDICATORS } from "../../api/_lib/provisionalDeletion.js";
+import { createGuardedGet } from "../../api/_lib/safeHttp.js";
 import {
-  API_KEY, FACILITY_XPATH, JPEG, ORGANISATION_XPATH, TOKEN,
-  captureLog, fakeClock, fetchAll, jsonPage, koboStub, ok, photo, startApp,
+  API_KEY, FACILITY_XPATH, JPEG, LOCAL_ENV, ORGANISATION_XPATH, TOKEN,
+  captureLog, fakeClock, fetchAll, isDataPageUrl, jsonPage, koboStub, ok, photo, recordingTransport, startApp,
 } from "./helpers.js";
 
-const ENV = Object.freeze({ KOBO_TOKEN: TOKEN, API_KEY });
+const ENV = Object.freeze({ KOBO_TOKEN: TOKEN, API_KEY, ...LOCAL_ENV });
+const ALLOWED_ORIGIN = "https://fbomapping2025.vercel.app";
 const SID = "424242";
 const UID_1 = "attFacilityPhoto00000001";
 const UID_2 = "attOrganisationPhoto0002";
@@ -58,29 +61,24 @@ function records() {
   ];
 }
 
-const observed = { responses: [], logs: [], upstream: [] };
-
-/** One app with a manual clock; several requests share its index. */
-async function session({ env = ENV, recs = records(), dataResponder, imageResponder, policyOptions } = {}) {
+/**
+ * One app with a manual clock; several requests share its index. Each
+ * session keeps its own responses, so no test depends on another test.
+ */
+async function session({ env = ENV, recs = records(), dataResponder, imageResponder, policyOptions, get } = {}) {
   const clock = fakeClock();
   const stub = koboStub({ records: recs, dataResponder, imageResponder });
   const { log, lines } = captureLog();
   const app = await startApp({
-    get: stub.get, env, log, now: clock.now, indexOptions: { setTimer: clock.setTimer }, policyOptions,
+    get: get ?? stub.get, env, log, now: clock.now, indexOptions: { setTimer: clock.setTimer }, policyOptions,
   });
+  const responses = [];
   const request = async (path, init = {}) => {
     const res = await fetchAll(await fetch(app.base + path, { redirect: "manual", ...init }));
-    observed.responses.push(res);
+    responses.push(res);
     return res;
   };
-  return {
-    clock, stub, lines, request,
-    async close() {
-      observed.logs.push(...lines);
-      observed.upstream.push(...stub.calls);
-      await app.close();
-    },
-  };
+  return { clock, stub, lines, responses, request, close: () => app.close() };
 }
 
 function assertNoStoreError(res, status) {
@@ -105,7 +103,8 @@ test("D31-T1: every authorised attachment serves small, medium and large, by uid
     }
     assert.equal(s.stub.dataCalls.length, 1, "one index build serves every request");
     assert.equal(s.stub.imageCalls.length, 6);
-    for (const res of observed.responses.slice(-6)) {
+    assert.equal(s.responses.length, 6);
+    for (const res of s.responses) {
       assert.doesNotMatch(String(res.headers["cache-control"]), /s-maxage|public/);
     }
   } finally {
@@ -366,7 +365,7 @@ test("D31-T13 and D31-T24: deletion and restoration simulations through /media",
 });
 
 test("D31-T15: kill switch and missing token: no index build and no Kobo request", async () => {
-  for (const env of [{ ...ENV, MEDIA_PROXY_ENABLED: "false" }, { API_KEY }]) {
+  for (const env of [{ ...ENV, MEDIA_PROXY_ENABLED: "false" }, { API_KEY, ...LOCAL_ENV }]) {
     const s = await session({ env });
     try {
       assertNoStoreError(await s.request(idsPath(SID, UID_1)), 503);
@@ -428,22 +427,147 @@ test("D31-T18: no photo question configured: no attachments listed, 404 with no 
   }
 });
 
-test("provisional deletion rule: Production environment serves no photo and lists no attachment", async () => {
-  const s = await session({ env: { ...ENV, VERCEL_ENV: "production" } });
+const IMAGE_ANSWER_RECORDS = () =>
+  records().map((r) =>
+    r._id === Number(SID)
+      ? { ...r, [FACILITY_XPATH]: "synthetic_facility_1.jpg", [ORGANISATION_XPATH]: "synthetic_org_2.jpg" }
+      : r,
+  );
+
+test("H-1 and M-1: blocked environments: /media 503 with no upstream request; /facilities lists no attachment", async () => {
+  const blocked = [
+    {},
+    { VERCEL: "1" },
+    { VERCEL_ENV: "production" },
+    { VERCEL_ENV: "preview" },
+    { VERCEL_ENV: "prod" },
+    { D31_LOCAL_PROVISIONAL: "true" },
+    { ...LOCAL_ENV, VERCEL: "1" },
+    { ...LOCAL_ENV, VERCEL_ENV: "production" },
+    { ...LOCAL_ENV, VERCEL_ENV: "preview" },
+    { ...LOCAL_ENV, NODE_ENV: "production" },
+    ...DEPLOYMENT_INDICATORS.map((name) => ({ ...LOCAL_ENV, [name]: "1" })),
+  ];
+  for (const extra of blocked) {
+    const label = JSON.stringify(extra);
+    const s = await session({ env: { KOBO_TOKEN: TOKEN, API_KEY, ...extra }, recs: IMAGE_ANSWER_RECORDS() });
+    try {
+      for (const path of [idsPath(SID, UID_1), idsPath(SID, "11", "large"), legacyPath(SID, UID_2, "medium")]) {
+        assertNoStoreError(await s.request(path), 503);
+      }
+      assert.equal(s.stub.calls.length, 0, `no upstream request: ${label}`);
+      assert.match(s.lines.join("\n"), /index_unavailable code=release_blocked/);
+
+      const res = await s.request(`/facilities?key=${API_KEY}`);
+      assert.equal(res.status, 200, label);
+      const text = res.body.toString();
+      for (const id of [UID_1, UID_2, UID_3, OTHER_UID, "synthetic_facility_1", "synthetic_org_2"]) {
+        assert.ok(!text.includes(id), `${id} not listed: ${label}`);
+      }
+      const body = JSON.parse(text);
+      for (const r of body) {
+        if (Object.hasOwn(r, "_attachments")) assert.deepEqual(r._attachments, [], label);
+      }
+      // The /facilities read is not offered to the blocked index.
+      assertNoStoreError(await s.request(idsPath(SID, UID_1)), 503);
+      assert.equal(s.stub.imageCalls.length, 0);
+    } finally {
+      await s.close();
+    }
+  }
+});
+
+test("H-1: explicit local opt-in serves authorised photos", async () => {
+  const s = await session();
   try {
-    assertNoStoreError(await s.request(idsPath(SID, UID_1)), 503);
-    assert.equal(s.stub.calls.length, 0);
-    assert.match(s.lines.join("\n"), /index_unavailable code=release_blocked/);
-    const body = JSON.parse((await s.request(`/facilities?key=${API_KEY}`)).body.toString());
-    for (const r of body) if (r._attachments) assert.deepEqual(r._attachments, []);
+    assert.equal((await s.request(idsPath(SID, UID_1))).status, 200);
+    assert.equal(s.stub.imageCalls.length, 1);
   } finally {
     await s.close();
   }
-  const preview = await session({ env: { ...ENV, VERCEL_ENV: "preview" } });
+});
+
+test("L-3: CORS preflight OPTIONS on /media is answered by CORS with no Kobo request", async () => {
+  const s = await session();
   try {
-    assert.equal((await preview.request(idsPath(SID, UID_1))).status, 200);
+    for (const path of [idsPath(SID, UID_1), legacyPath(SID, UID_1), "/media"]) {
+      const allowed = await s.request(path, {
+        method: "OPTIONS",
+        headers: { Origin: ALLOWED_ORIGIN, "Access-Control-Request-Method": "GET" },
+      });
+      assert.equal(allowed.status, 204);
+      assert.equal(allowed.headers["access-control-allow-origin"], ALLOWED_ORIGIN);
+      assert.equal(allowed.headers["access-control-allow-methods"], "GET");
+      assert.equal(allowed.body.length, 0);
+
+      const foreign = await s.request(path, {
+        method: "OPTIONS",
+        headers: { Origin: "https://evil.example", "Access-Control-Request-Method": "GET" },
+      });
+      assert.equal(foreign.status, 204);
+      assert.notEqual(foreign.headers["access-control-allow-origin"], "https://evil.example");
+      assert.equal(foreign.body.length, 0);
+    }
+    assert.equal(s.stub.calls.length, 0, "no data read and no image request");
+    assert.equal(s.lines.length, 0);
   } finally {
-    await preview.close();
+    await s.close();
+  }
+});
+
+test("L-4: /facilities does not send raw image-answer file names; other fields stay", async () => {
+  const s = await session({ recs: IMAGE_ANSWER_RECORDS() });
+  try {
+    const res = await s.request(`/facilities?key=${API_KEY}`);
+    assert.equal(res.status, 200);
+    const text = res.body.toString();
+    assert.doesNotMatch(text, /synthetic_facility_1|synthetic_org_2|\.jpg/);
+    const rec = JSON.parse(text).find((r) => r._id === Number(SID));
+    assert.equal(Object.hasOwn(rec, FACILITY_XPATH), false);
+    assert.equal(Object.hasOwn(rec, ORGANISATION_XPATH), false);
+    assert.equal(rec["fbo_details/name_of_facility"], "Synthetic Facility");
+    assert.deepEqual(rec._attachments.map((a) => a.uid), [UID_1, UID_2, UID_3]);
+  } finally {
+    await s.close();
+  }
+});
+
+test("L-5: /facilities API key: missing, empty, incorrect and correct configuration", async () => {
+  const SECRET_KEY = "SENTINEL_API_KEY_93ab";
+  const cases = [
+    // [label, env API_KEY, query, status, Kobo read expected]
+    ["missing API_KEY, no key", undefined, "", 503, false],
+    ["missing API_KEY, any key", undefined, "?key=anything", 503, false],
+    ["missing API_KEY, key=undefined text", undefined, "?key=undefined", 503, false],
+    ["empty API_KEY, empty key", "", "?key=", 503, false],
+    ["configured, no key", SECRET_KEY, "", 403, false],
+    ["configured, empty key", SECRET_KEY, "?key=", 403, false],
+    ["configured, wrong key", SECRET_KEY, "?key=wrong", 403, false],
+    ["configured, repeated key", SECRET_KEY, `?key=${SECRET_KEY}&key=${SECRET_KEY}`, 403, false],
+    ["configured, bracket key", SECRET_KEY, `?key[]=${SECRET_KEY}`, 403, false],
+    ["configured, correct key", SECRET_KEY, `?key=${SECRET_KEY}`, 200, true],
+  ];
+  for (const [label, apiKey, query, status, reads] of cases) {
+    const env = { KOBO_TOKEN: TOKEN, ...LOCAL_ENV };
+    if (apiKey !== undefined) env.API_KEY = apiKey;
+    const s = await session({ env });
+    try {
+      const res = await s.request(`/facilities${query}`);
+      assert.equal(res.status, status, label);
+      assert.equal(s.stub.dataCalls.length > 0, reads, label);
+      if (status === 503) {
+        assert.equal(res.headers["cache-control"], "no-store");
+        assert.match(s.lines.join("\n"), /config_error code=missing_api_key/);
+      }
+      if (status === 200) assert.ok(Array.isArray(JSON.parse(res.body.toString())));
+      for (const r of s.responses) {
+        assert.ok(!r.body.includes(SECRET_KEY), label);
+        assert.ok(!JSON.stringify(r.headers).includes(SECRET_KEY), label);
+      }
+      assert.ok(!s.lines.join("\n").includes(SECRET_KEY), label);
+    } finally {
+      await s.close();
+    }
   }
 });
 
@@ -467,6 +591,7 @@ test("D31-T22: DELETE, PUT, POST, PATCH give 405 on /media; no other API route e
 });
 
 test("D31-T23: legacy key is never compared, logged, returned or sent upstream", async () => {
+  const responses = [];
   for (const apiKey of [LEGACY_KEY, API_KEY]) {
     const s = await session({ env: { ...ENV, API_KEY: apiKey } });
     try {
@@ -479,20 +604,38 @@ test("D31-T23: legacy key is never compared, logged, returned or sent upstream",
         assert.ok(!JSON.stringify(c.opts).includes(LEGACY_KEY));
       }
       assert.ok(!s.lines.join("\n").includes(LEGACY_KEY));
+      responses.push(...s.responses);
     } finally {
       await s.close();
     }
   }
-  for (const r of observed.responses) {
+  assert.equal(responses.length, 6);
+  for (const r of responses) {
     assert.ok(!r.body.includes(LEGACY_KEY));
     assert.ok(!JSON.stringify(r.headers).includes(LEGACY_KEY));
   }
 });
 
-test("D31-T16: every upstream call is a GET to a server-built Kobo URL; no write method in api/", () => {
-  for (const c of observed.upstream) {
-    assert.equal(c.opts.method, undefined, "the stub get is GET-only; no method override");
-    assert.ok(c.url.startsWith(`${KOBO_ORIGIN}/api/v2/assets/${KOBO_ASSET_UID}/data/`));
+test("D31-T16: the real guardedGet sends only GET to server-built Kobo URLs; no write method in api/", async () => {
+  const { transport, requests } = recordingTransport((url) =>
+    isDataPageUrl(url) ? jsonPage({ results: records(), next: null }) : ok(JPEG, "image/jpeg"),
+  );
+  const s = await session({ get: createGuardedGet({ transport }) });
+  try {
+    assert.equal((await s.request(idsPath(SID, UID_1))).status, 200);
+    assert.equal((await s.request(idsPath(SID, "12", "large"), { method: "HEAD" })).status, 200);
+    assert.equal((await s.request(legacyPath(SID, UID_2, "medium"))).status, 200);
+    assert.equal((await s.request(`/facilities?key=${API_KEY}`)).status, 200);
+    for (const method of ["DELETE", "PUT", "POST", "PATCH"]) {
+      assert.equal((await s.request(idsPath(SID, UID_1), { method })).status, 405);
+    }
+    assert.ok(requests.length >= 5);
+    for (const r of requests) {
+      assert.equal(r.method, "GET", r.url);
+      assert.ok(r.url.startsWith(`${KOBO_ORIGIN}/api/v2/assets/${KOBO_ASSET_UID}/data/`));
+    }
+  } finally {
+    await s.close();
   }
   const apiDir = fileURLToPath(new URL("../../api/", import.meta.url));
   const files = [join(apiDir, "index.js"), ...readdirSync(join(apiDir, "_lib")).map((f) => join(apiDir, "_lib", f))];
@@ -502,23 +645,46 @@ test("D31-T16: every upstream call is a GET to a server-built Kobo URL; no write
     assert.doesNotMatch(src, /\bapp\.(delete|put|post|patch)\s*\(/i, file);
     assert.doesNotMatch(src, /\b(unlink|rmSync|rm|deleteAttachment|bulk_delete)\s*\(/, file);
   }
-  const safeHttp = readFileSync(join(apiDir, "_lib", "safeHttp.js"), "utf8");
-  assert.match(safeHttp, /method:\s*"GET"/);
 });
 
-// Runs last: D31-T19.
-test("D31-T19: token, legacy key and attachment identifiers never in responses or logs", () => {
-  assert.ok(observed.responses.length > 100);
-  for (const r of observed.responses) {
-    assert.ok(!r.body.includes(TOKEN));
-    assert.ok(!JSON.stringify(r.headers).includes(TOKEN));
-  }
-  for (const line of observed.logs) {
-    for (const secret of [TOKEN, LEGACY_KEY, SID, UID_1, UID_2, OTHER_UID, "kf.kobotoolbox.org"]) {
-      assert.ok(!line.includes(secret), `log line contains ${secret}`);
+test("D31-T19: token, legacy key and attachment identifiers never in responses or logs", async () => {
+  // Self-contained: success, misses, rejects, failures and /facilities.
+  let fail = false;
+  const s = await session({
+    dataResponder: (url, opts, n, state) =>
+      fail ? { status: 500, headers: {}, body: Buffer.alloc(0) } : jsonPage({ results: state.records, next: null }),
+  });
+  try {
+    const expected = [
+      [idsPath(SID, UID_1), 200],
+      [legacyPath(SID, UID_2, "large", `&key=${LEGACY_KEY}`), 200],
+      [idsPath(SID, MARKED), 404],
+      [legacyPath(OTHER_SID, UID_1, "small", `&key=${LEGACY_KEY}`), 404],
+      [`${idsPath(SID, UID_1)}&key=${LEGACY_KEY}`, 400],
+      [`/media?url=${encodeURIComponent(`https://evil.example/${TOKEN}`)}&key=${LEGACY_KEY}`, 400],
+      [`/facilities?key=${API_KEY}`, 200],
+    ];
+    for (const [path, status] of expected) assert.equal((await s.request(path)).status, status, path);
+    fail = true;
+    s.clock.advance(INDEX_MAX_AGE_MS + 1);
+    assert.equal((await s.request(idsPath(SID, UID_1))).status, 503);
+    assert.equal((await s.request(legacyPath(SID, UID_1, "small", `&key=${LEGACY_KEY}`))).status, 503);
+
+    // Images carried the stub JPEG bytes; the token went only in the header.
+    assert.ok(s.responses.filter((r) => r.status === 200 && r.body.equals(JPEG)).length === 2);
+    for (const c of s.stub.calls) assert.equal(c.opts.headers.Authorization, `Token ${TOKEN}`);
+    assert.ok(s.lines.length > 0, "the failures were logged");
+    for (const r of s.responses) {
+      assert.ok(!r.body.includes(TOKEN));
+      assert.ok(!r.body.includes(LEGACY_KEY));
+      assert.ok(!JSON.stringify(r.headers).includes(TOKEN));
     }
+    for (const line of s.lines) {
+      for (const secret of [TOKEN, LEGACY_KEY, API_KEY, SID, UID_1, UID_2, OTHER_UID, "kf.kobotoolbox.org"]) {
+        assert.ok(!line.includes(secret), `log line contains ${secret}`);
+      }
+    }
+  } finally {
+    await s.close();
   }
-  // Images carried JPEG bytes only from the stub.
-  assert.ok(observed.responses.some((r) => r.status === 200 && r.body.equals(JPEG)));
-  assert.ok(ok);
 });

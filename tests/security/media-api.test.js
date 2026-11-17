@@ -4,13 +4,13 @@ import { Buffer } from "node:buffer";
 import { KOBO_ASSET_UID } from "../../api/_lib/kobo.js";
 import { MEDIA_MAX_BYTES } from "../../api/_lib/media.js";
 import {
-  API_KEY, FACILITY_XPATH, HTML, JPEG, PNG, SVG, TOKEN, WEBP, captureLog, fetchAll, koboStub, ok, startApp,
+  API_KEY, FACILITY_XPATH, HTML, JPEG, LOCAL_ENV, PNG, SVG, TOKEN, WEBP, captureLog, fetchAll, koboStub, ok, startApp,
 } from "./helpers.js";
 
 const SID = "123456789";
 const UID = "attWNZNwhXK6HDYVkZJSn9jy";
 const CANONICAL_SMALL = `https://kf.kobotoolbox.org/api/v2/assets/${KOBO_ASSET_UID}/data/${SID}/attachments/${UID}/small/`;
-const ENV = Object.freeze({ KOBO_TOKEN: TOKEN, API_KEY });
+const ENV = Object.freeze({ KOBO_TOKEN: TOKEN, API_KEY, ...LOCAL_ENV });
 
 // Synthetic Kobo data for the D31 index: one authorised photo, addressed by
 // uid or by numeric id 42.
@@ -18,10 +18,16 @@ const RECORDS = [
   { _id: Number(SID), _attachments: [{ uid: UID, id: 42, mimetype: "image/jpeg", question_xpath: FACILITY_XPATH }] },
 ];
 
-// Every response and log line produced in this file is collected and checked
-// for the sentinel token at the end.
-const observedResponses = [];
-const observedLogs = [];
+// Every response and log line produced in this file is checked for the
+// sentinel token inside `run`, so no test depends on another test.
+function assertNoTokenLeak(res, lines) {
+  assert.ok(!res.body.includes(TOKEN), "token in response body");
+  assert.ok(!JSON.stringify(res.headers).includes(TOKEN), "token in response headers");
+  for (const line of lines) {
+    assert.ok(!line.includes(TOKEN), "token in logs");
+    assert.ok(!line.includes("kf.kobotoolbox.org/api"), "attachment URL in logs");
+  }
+}
 
 async function run({ responder = () => ok(JPEG, "image/jpeg"), env = ENV, path, method = "GET", headers = {} }) {
   const stub = koboStub({ records: RECORDS, imageResponder: responder });
@@ -29,8 +35,7 @@ async function run({ responder = () => ok(JPEG, "image/jpeg"), env = ENV, path, 
   const app = await startApp({ get: stub.get, env, log });
   try {
     const res = await fetchAll(await fetch(app.base + path, { method, headers, redirect: "manual" }));
-    observedResponses.push(res);
-    observedLogs.push(...lines);
+    assertNoTokenLeak(res, lines);
     // `calls` are image requests only; the index data read is separate.
     return { res, calls: stub.imageCalls, dataCalls: stub.dataCalls, lines };
   } finally {
@@ -299,23 +304,28 @@ test("kill switch disables the proxy without contacting Kobo", async () => {
 });
 
 test("missing Kobo token fails closed without contacting Kobo", async () => {
-  const { res, calls, dataCalls, lines } = await run({ env: { API_KEY }, path: idsPath() });
+  const { res, calls, dataCalls, lines } = await run({ env: { API_KEY, ...LOCAL_ENV }, path: idsPath() });
   assertSafeErrorResponse(res, 503);
   assert.equal(calls.length, 0);
   assert.equal(dataCalls.length, 0);
   assert.match(lines.join("\n"), /missing_token/);
 });
 
-// Runs last (tests in a file run sequentially): token confidentiality across
-// every response and log line produced above.
-test("the Kobo token never appears in any response or log line", () => {
-  assert.ok(observedResponses.length > 50);
-  for (const r of observedResponses) {
-    assert.ok(!r.body.includes(TOKEN), "token in response body");
-    assert.ok(!JSON.stringify(r.headers).includes(TOKEN), "token in response headers");
-  }
-  for (const line of observedLogs) {
-    assert.ok(!line.includes(TOKEN), "token in logs");
-    assert.ok(!line.includes("kf.kobotoolbox.org/api"), "attachment URL in logs");
-  }
+test("the Kobo token never appears in any response or log line", async () => {
+  // Self-contained: success, rejects, upstream failures and a logged error.
+  const results = [
+    await run({ path: idsPath() }),
+    await run({ path: legacyPath(`https://kf.kobotoolbox.org/${TOKEN}`) }),
+    await run({ path: idsPath(), responder: () => ({ status: 401, headers: {}, body: Buffer.from(TOKEN) }) }),
+    await run({
+      path: idsPath(),
+      responder: () => {
+        throw Object.assign(new Error(`failed with ${TOKEN}`), { code: "ECONNRESET" });
+      },
+    }),
+    await run({ path: idsPath(), responder: () => ok(Buffer.from(`<html>${TOKEN}</html>`), "image/jpeg") }),
+  ];
+  assert.deepEqual(results.map((r) => r.res.status), [200, 400, 502, 502, 502]);
+  assert.ok(results.some((r) => r.lines.length > 0), "failures were logged");
+  for (const { res, lines } of results) assertNoTokenLeak(res, lines);
 });

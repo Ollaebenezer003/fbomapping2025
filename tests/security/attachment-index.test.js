@@ -20,18 +20,22 @@ import {
 import {
   DELETION_RULE_PROVISIONAL,
   DELETION_RULE_STATUS,
+  DEPLOYMENT_INDICATORS,
   isDeletionRuleReleaseBlocked,
+  isLocalProvisionalAllowed,
   isProvisionallyDeleted,
 } from "../../api/_lib/provisionalDeletion.js";
 import { KOBO_DATA_URL, KOBO_DATA_PATH, KOBO_ORIGIN } from "../../api/_lib/kobo.js";
+import { createGuardedGet } from "../../api/_lib/safeHttp.js";
 import {
-  FACILITY_XPATH, ORGANISATION_XPATH, TOKEN, captureLog, fakeClock, flush, jsonPage, koboStub, photo,
+  FACILITY_XPATH, LOCAL_ENV, ORGANISATION_XPATH, TOKEN, captureLog, fakeClock, flush, isDataPageUrl, jsonPage,
+  koboStub, photo, recordingTransport,
 } from "./helpers.js";
 
 const UID_A = "attAAAAAAAAAAAAAAAAAAAAA";
 const UID_B = "attBBBBBBBBBBBBBBBBBBBBB";
 const UID_C = "attCCCCCCCCCCCCCCCCCCCCC";
-const POLICY = createAttachmentPolicy({ env: {} });
+const POLICY = createAttachmentPolicy({ env: LOCAL_ENV });
 const PAGE2 = `${KOBO_ORIGIN}${KOBO_DATA_PATH}?format=json&limit=1000&start=1000`;
 
 const recordA = () => ({ _id: 101, _attachments: [photo(UID_A, { id: 1 })] });
@@ -130,9 +134,12 @@ test("D31-T3 (predicate): approved and rejected attachments", () => {
   assert.equal(ok(photo(UID_A, { is_deleted: true })), false);
 
   // A throwing isDeleted is a refusal.
-  const throwing = createAttachmentPolicy({ isDeleted: () => { throw new Error("x"); } });
+  const throwing = createAttachmentPolicy({ env: LOCAL_ENV, isDeleted: () => { throw new Error("x"); } });
+  assert.equal(throwing.releaseBlocked, false, "the refusal comes from isDeleted, not the release block");
   assert.equal(isAuthorisedAttachment({ _id: 7, _attachments: [att] }, att, throwing), false);
-  const truthy = createAttachmentPolicy({ isDeleted: () => "no" });
+  const truthy = createAttachmentPolicy({ env: LOCAL_ENV, isDeleted: () => "no" });
+  const falsy = createAttachmentPolicy({ env: LOCAL_ENV, isDeleted: () => false });
+  assert.equal(isAuthorisedAttachment({ _id: 7, _attachments: [att] }, att, falsy), true, "control: false authorises");
   assert.equal(isAuthorisedAttachment({ _id: 7, _attachments: [att] }, att, truthy), false, "only false authorises");
 });
 
@@ -165,26 +172,60 @@ test("provisional deletion check: only RC-9 observed states pass; ambiguous stat
   for (const value of [null, undefined, "x", 1, []]) assert.equal(isProvisionallyDeleted(value), true);
 });
 
-test("provisional deletion rule is blocked in a Vercel Production environment", () => {
-  assert.equal(isDeletionRuleReleaseBlocked({ VERCEL_ENV: "production" }), true);
-  assert.equal(isDeletionRuleReleaseBlocked({ VERCEL_ENV: " Production " }), true);
-  assert.equal(isDeletionRuleReleaseBlocked({ VERCEL_ENV: "preview" }), false);
-  assert.equal(isDeletionRuleReleaseBlocked({ VERCEL_ENV: "development" }), false);
-  assert.equal(isDeletionRuleReleaseBlocked({}), false);
-  assert.equal(isDeletionRuleReleaseBlocked({ VERCEL_ENV: "production" }, false), false, "an approved rule is not blocked");
+test("H-1 and M-1: provisional deletion rule is blocked by default in every environment", () => {
+  const blockedEnvs = [
+    ["no environment variables", {}],
+    ["null environment", null],
+    ["VERCEL=1, VERCEL_ENV missing", { VERCEL: "1" }],
+    ["VERCEL_ENV=production", { VERCEL_ENV: "production" }],
+    ["VERCEL_ENV=preview", { VERCEL_ENV: "preview" }],
+    ["VERCEL_ENV=prod", { VERCEL_ENV: "prod" }],
+    ["VERCEL_ENV=development", { VERCEL_ENV: "development" }],
+    ["opt-in with VERCEL=1", { ...LOCAL_ENV, VERCEL: "1" }],
+    ["opt-in with VERCEL_ENV=production", { ...LOCAL_ENV, VERCEL_ENV: "production" }],
+    ["opt-in with VERCEL_ENV=preview", { ...LOCAL_ENV, VERCEL_ENV: "preview" }],
+    ["opt-in with VERCEL_ENV=prod", { ...LOCAL_ENV, VERCEL_ENV: "prod" }],
+    ["opt-in with empty-looking VERCEL=0", { ...LOCAL_ENV, VERCEL: "0" }],
+    ["opt-in with NODE_ENV=production", { ...LOCAL_ENV, NODE_ENV: "production" }],
+    ["opt-in with NODE_ENV=staging", { ...LOCAL_ENV, NODE_ENV: "staging" }],
+  ];
+  for (const name of DEPLOYMENT_INDICATORS) {
+    blockedEnvs.push([`opt-in with ${name}`, { ...LOCAL_ENV, [name]: "x" }]);
+  }
+  for (const value of ["true", "yes", "on", "01", " 1", "1 ", "TRUE", "", "0", "false", 1, true]) {
+    blockedEnvs.push([`unexpected flag ${JSON.stringify(value)}`, { D31_LOCAL_PROVISIONAL: value }]);
+  }
+  blockedEnvs.push(["flag in lower case", { d31_local_provisional: "1" }]);
 
-  const blocked = createAttachmentPolicy({ env: { VERCEL_ENV: "production" } });
-  assert.equal(blocked.releaseBlocked, true);
-  const rec = recordA();
-  assert.equal(isAuthorisedAttachment(rec, rec._attachments[0], blocked), false);
-  assert.deepEqual(projectAuthorisedAttachments(rec, blocked), []);
+  for (const [label, env] of blockedEnvs) {
+    assert.equal(isLocalProvisionalAllowed(env), false, label);
+    assert.equal(isDeletionRuleReleaseBlocked(env), true, label);
+    const policy = createAttachmentPolicy({ env });
+    assert.equal(policy.releaseBlocked, true, label);
+    const rec = recordA();
+    assert.equal(isAuthorisedAttachment(rec, rec._attachments[0], policy), false, label);
+    assert.deepEqual(projectAuthorisedAttachments(rec, policy), [], label);
+  }
+
+  // Explicit local opt-in, with or without a local NODE_ENV.
+  for (const env of [LOCAL_ENV, { ...LOCAL_ENV, NODE_ENV: "development" }, { ...LOCAL_ENV, NODE_ENV: "test" }]) {
+    assert.equal(isLocalProvisionalAllowed(env), true, JSON.stringify(env));
+    assert.equal(createAttachmentPolicy({ env }).releaseBlocked, false);
+  }
+  // An approved (non-provisional) rule is not blocked. This is a code
+  // constant, not an environment flag: there is no Production bypass flag.
+  assert.equal(isDeletionRuleReleaseBlocked({ VERCEL_ENV: "production" }, false), false);
+  // The default policy (no env argument) is blocked.
+  assert.equal(createAttachmentPolicy().releaseBlocked, true);
 });
 
 test("release block: the index refuses without any Kobo request", async () => {
-  const { stub, index } = setup({ policy: createAttachmentPolicy({ env: { VERCEL_ENV: "production" } }) });
-  await rejectsWith(index.getFreshIndex(), "release_blocked");
-  assert.equal(index.offer([recordA()], Date.now()), false);
-  assert.equal(stub.calls.length, 0);
+  for (const env of [{}, { VERCEL: "1" }, { VERCEL_ENV: "production" }, { VERCEL_ENV: "preview" }, { ...LOCAL_ENV, VERCEL: "1" }]) {
+    const { clock, stub, index } = setup({ policy: createAttachmentPolicy({ env }) });
+    await rejectsWith(index.getFreshIndex(), "release_blocked");
+    assert.equal(index.offer([recordA()], clock.now()), false);
+    assert.equal(stub.calls.length, 0, JSON.stringify(env));
+  }
 });
 
 // ---- Index build ----------------------------------------------------------
@@ -260,7 +301,7 @@ test("D31-T12: empty, malformed and emptied Kobo data are failed builds", async 
 });
 
 test("D31-T18 (index): no photo question configured gives an empty index with no Kobo request", async () => {
-  const { stub, index } = setup({ policy: createAttachmentPolicy({ photoQuestionXpaths: [] }) });
+  const { stub, index } = setup({ policy: createAttachmentPolicy({ env: LOCAL_ENV, photoQuestionXpaths: [] }) });
   const idx = await index.getFreshIndex();
   assert.equal(idx.has("101", UID_A), false);
   assert.equal(index.offer([recordA()], Date.now()), false);
@@ -451,6 +492,79 @@ test("D31-T14: an older result never replaces a newer index", async () => {
   assert.equal(index.inspect().readStartedAt, t0 + 500);
 });
 
+test("L-1: waiters of a failing build get a fresh offered index; no backoff starts", async () => {
+  for (const failure of ["deadline", "error"]) {
+    const gate = gatedData();
+    const { clock, stub, index, lines } = setup({ dataResponder: gate.responder });
+    const t0 = clock.now();
+    const waits = [index.getFreshIndex(), index.getFreshIndex()];
+    await flush();
+    assert.equal(gate.pending.length, 1, "single flight");
+    clock.advance(1_000);
+    const offered = [{ _id: 101, _attachments: [photo(UID_C)] }];
+    assert.equal(index.offer(offered, t0 + 500), true);
+    if (failure === "deadline") clock.advance(INDEX_BUILD_TIMEOUT_MS);
+    else gate.pending[0].resolve({ status: 502, headers: {}, body: Buffer.alloc(0) });
+    const results = await Promise.all(waits);
+    for (const idx of results) {
+      assert.equal(idx.readStartedAt, t0 + 500, failure);
+      assert.equal(idx.has("101", UID_C), true);
+    }
+    assert.equal(index.inspect().lastFailureAt, null, "no backoff");
+    assert.equal(index.inspect().building, false);
+    assert.match(lines.join("\n"), /build_failed_fresh_index_used/);
+    // The failed build result is never installed, also if it arrives later.
+    if (failure === "deadline") {
+      gate.pending[0].resolve(jsonPage({ results: [recordA()], next: null }));
+      await flush();
+      await flush();
+    }
+    assert.equal((await index.getFreshIndex()).has("101", UID_A), false);
+    assert.equal(stub.dataCalls.length, 1);
+  }
+});
+
+test("L-1 control: a failing build with no fresh index still gives 503 and backoff", async () => {
+  const gate = gatedData();
+  const { clock, index } = setup({ dataResponder: gate.responder });
+  const wait = index.getFreshIndex();
+  await flush();
+  clock.advance(1_000);
+  assert.equal(index.offer([recordA()], clock.now() - INDEX_MAX_AGE_MS - 1), false, "stale offer refused");
+  gate.pending[0].resolve({ status: 502, headers: {}, body: Buffer.alloc(0) });
+  await rejectsWith(wait, "status_502");
+  await rejectsWith(index.getFreshIndex(), "backoff");
+});
+
+test("L-2: a completed build that is not fresh is a failed build with backoff", async () => {
+  // Case 1: the read takes longer than the maximum age (short test limit).
+  {
+    const gate = gatedData();
+    const { clock, stub, index } = setup({ dataResponder: gate.responder, maxAgeMs: 1_000 });
+    const wait = index.getFreshIndex();
+    await flush();
+    clock.advance(2_000);
+    gate.pending[0].resolve(jsonPage({ results: [recordA()], next: null }));
+    await rejectsWith(wait, "stale_result");
+    assert.notEqual(index.inspect().lastFailureAt, null);
+    await rejectsWith(index.getFreshIndex(), "backoff");
+    await rejectsWith(index.getFreshIndex(), "backoff");
+    assert.equal(stub.dataCalls.length, 1, "no immediate repeated Kobo read");
+  }
+  // Case 2: the clock steps back below the read start of the installed index.
+  {
+    const { clock, stub, index } = setup();
+    await index.getFreshIndex();
+    clock.advance(-60_000);
+    await rejectsWith(index.getFreshIndex(), "stale_result");
+    for (let i = 0; i < 5; i += 1) await rejectsWith(index.getFreshIndex(), "backoff");
+    assert.equal(stub.dataCalls.length, 2, "one read, then backoff");
+    clock.advance(INDEX_RETRY_BACKOFF_MS);
+    await rejectsWith(index.getFreshIndex(), "stale_result");
+    assert.equal(stub.dataCalls.length, 3, "at most one read per backoff period");
+  }
+});
+
 test("Scope item 10 (offer): /facilities reads populate the index only when fresh and valid", async () => {
   const { clock, stub, index } = setup();
   const t = clock.now();
@@ -504,7 +618,26 @@ test("D31-T16 (index): the index sends only data-page GETs and holds no record c
   const { stub, index } = setup();
   const idx = await index.getFreshIndex();
   assert.ok(stub.calls.every((c) => c.url.startsWith(KOBO_DATA_URL.split("?")[0])));
-  assert.ok(stub.calls.every((c) => c.opts.method === undefined), "no method override");
   assert.deepEqual(Object.keys(idx).sort(), ["attachmentCount", "has", "ids", "readStartedAt"]);
   assert.ok(Object.isFrozen(idx));
+});
+
+test("D31-T16 (index, real guardedGet): every index request is sent with method GET", async () => {
+  const PAGE1 = { results: [recordA()], next: PAGE2 };
+  const { transport, requests } = recordingTransport((url) =>
+    jsonPage(url === KOBO_DATA_URL ? PAGE1 : { results: [recordB()], next: null }),
+  );
+  const index = createAttachmentIndex({
+    get: createGuardedGet({ transport }),
+    getToken: () => TOKEN,
+    policy: POLICY,
+    log: captureLog().log,
+  });
+  const idx = await index.getFreshIndex();
+  assert.equal(idx.has("102", UID_B), true);
+  assert.equal(requests.length, 2);
+  for (const r of requests) {
+    assert.equal(r.method, "GET");
+    assert.ok(isDataPageUrl(r.url));
+  }
 });

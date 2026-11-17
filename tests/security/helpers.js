@@ -2,6 +2,9 @@
 // are served by injected fakes or by local servers bound to 127.0.0.1.
 
 import { Buffer } from "node:buffer";
+import { EventEmitter } from "node:events";
+import http from "node:http";
+import { Readable } from "node:stream";
 import { setImmediate } from "node:timers";
 import { createApp } from "../../api/_lib/app.js";
 import { KOBO_DATA_PATH, KOBO_ORIGIN } from "../../api/_lib/kobo.js";
@@ -10,6 +13,10 @@ import { KOBO_DATA_PATH, KOBO_ORIGIN } from "../../api/_lib/kobo.js";
 // and is only ever sent in the Authorization header of canonical requests.
 export const TOKEN = "SENTINEL_KOBO_TOKEN_7f3a9c51e2";
 export const API_KEY = "test-public-key";
+
+// Explicit local opt-in for the provisional deletion rule (D31 H-1). Tests
+// that need authorised photos set it; every other environment is blocked.
+export const LOCAL_ENV = Object.freeze({ D31_LOCAL_PROVISIONAL: "1" });
 
 export const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01]);
 export const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d]);
@@ -128,6 +135,34 @@ export function fakeClock(start = 1_000_000) {
       }
     },
   };
+}
+
+/**
+ * Recording transport for the real `createGuardedGet`. No socket is opened.
+ * Every request records the HTTP method that guardedGet really sends.
+ * `responder(url)` returns `{ status, headers, body }`.
+ */
+export function recordingTransport(responder) {
+  const requests = [];
+  const transport = {
+    Agent: http.Agent,
+    request(url, opts, onResponse) {
+      requests.push({ url: String(url), method: opts?.method });
+      const req = new EventEmitter();
+      req.destroy = () => {};
+      req.end = () => {
+        setImmediate(() => {
+          const r = responder(String(url));
+          const res = Readable.from(r.body && r.body.length ? [r.body] : [], { objectMode: false });
+          res.statusCode = r.status;
+          res.headers = r.headers ?? {};
+          onResponse(res);
+        });
+      };
+      return req;
+    },
+  };
+  return { transport, requests };
 }
 
 /** Wait until queued promise callbacks have run. */
