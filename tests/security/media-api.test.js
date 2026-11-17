@@ -4,7 +4,7 @@ import { Buffer } from "node:buffer";
 import { KOBO_ASSET_UID } from "../../api/_lib/kobo.js";
 import { MEDIA_MAX_BYTES } from "../../api/_lib/media.js";
 import {
-  API_KEY, HTML, JPEG, PNG, SVG, TOKEN, WEBP, captureLog, fakeGet, fetchAll, ok, startApp,
+  API_KEY, FACILITY_XPATH, HTML, JPEG, PNG, SVG, TOKEN, WEBP, captureLog, fetchAll, koboStub, ok, startApp,
 } from "./helpers.js";
 
 const SID = "123456789";
@@ -12,20 +12,27 @@ const UID = "attWNZNwhXK6HDYVkZJSn9jy";
 const CANONICAL_SMALL = `https://kf.kobotoolbox.org/api/v2/assets/${KOBO_ASSET_UID}/data/${SID}/attachments/${UID}/small/`;
 const ENV = Object.freeze({ KOBO_TOKEN: TOKEN, API_KEY });
 
+// Synthetic Kobo data for the D31 index: one authorised photo, addressed by
+// uid or by numeric id 42.
+const RECORDS = [
+  { _id: Number(SID), _attachments: [{ uid: UID, id: 42, mimetype: "image/jpeg", question_xpath: FACILITY_XPATH }] },
+];
+
 // Every response and log line produced in this file is collected and checked
 // for the sentinel token at the end.
 const observedResponses = [];
 const observedLogs = [];
 
 async function run({ responder = () => ok(JPEG, "image/jpeg"), env = ENV, path, method = "GET", headers = {} }) {
-  const { get, calls } = fakeGet(responder);
+  const stub = koboStub({ records: RECORDS, imageResponder: responder });
   const { log, lines } = captureLog();
-  const app = await startApp({ get, env, log });
+  const app = await startApp({ get: stub.get, env, log });
   try {
     const res = await fetchAll(await fetch(app.base + path, { method, headers, redirect: "manual" }));
     observedResponses.push(res);
     observedLogs.push(...lines);
-    return { res, calls, lines };
+    // `calls` are image requests only; the index data read is separate.
+    return { res, calls: stub.imageCalls, dataCalls: stub.dataCalls, lines };
   } finally {
     await app.close();
   }
@@ -59,7 +66,7 @@ test("delivers JPEG, PNG and WebP with safe headers from a server-built URL", as
     assert.equal(res.headers["x-content-type-options"], "nosniff");
     assert.equal(res.headers["content-security-policy"], "default-src 'none'; sandbox");
     assert.equal(res.headers["content-disposition"], `inline; filename="photo.${ext}"`);
-    assert.equal(res.headers["cache-control"], "public, max-age=3600, s-maxage=86400");
+    assert.equal(res.headers["cache-control"], "private, max-age=300");
     assert.equal(res.headers["referrer-policy"], "no-referrer");
     assert.equal(res.headers["set-cookie"], undefined);
     assert.equal(calls.length, 1);
@@ -134,9 +141,9 @@ test("malicious or non-canonical legacy URLs are rejected without any upstream r
     "file:///etc/passwd",
     `${CANONICAL_SMALL}?format=json${"a".repeat(2100)}`,
   ]) {
-    const { res, calls } = await run({ path: legacyPath(raw) });
+    const { res, calls, dataCalls } = await run({ path: legacyPath(raw) });
     assertSafeErrorResponse(res, 400);
-    assert.equal(calls.length, 0, raw.slice(0, 100));
+    assert.equal(calls.length + dataCalls.length, 0, raw.slice(0, 100));
   }
 });
 
@@ -161,18 +168,19 @@ test("invalid identifiers are rejected without any upstream request", async () =
     "/media",
     "/media?key=anything",
   ]) {
-    const { res, calls } = await run({ path });
+    const { res, calls, dataCalls } = await run({ path });
     assertSafeErrorResponse(res, 400);
-    assert.equal(calls.length, 0, path);
+    assert.equal(calls.length + dataCalls.length, 0, path);
   }
 });
 
 test("non-GET methods are rejected", async () => {
   for (const method of ["POST", "PUT", "DELETE", "PATCH"]) {
-    const { res, calls } = await run({ path: idsPath(), method });
+    const { res, calls, dataCalls } = await run({ path: idsPath(), method });
     assertSafeErrorResponse(res, 405);
     assert.equal(res.headers.allow, "GET, HEAD");
     assert.equal(calls.length, 0);
+    assert.equal(dataCalls.length, 0);
   }
 });
 
@@ -203,6 +211,7 @@ test("every upstream redirect is rejected; only the redirect host is logged", as
 test("upstream status codes map to generic errors", async () => {
   const cases = [
     [404, 404, null],
+    [410, 404, null], // D31 OD-8
     [401, 502, /kobo_auth_failure status=401/],
     [403, 502, /kobo_auth_failure status=403/],
     [500, 502, /upstream_status status=500/],
@@ -278,9 +287,10 @@ test("untrusted error codes are not written to logs", async () => {
 
 test("kill switch disables the proxy without contacting Kobo", async () => {
   for (const value of ["false", "FALSE", "0", "off", "no", " false "]) {
-    const { res, calls } = await run({ env: { ...ENV, MEDIA_PROXY_ENABLED: value }, path: idsPath() });
+    const { res, calls, dataCalls } = await run({ env: { ...ENV, MEDIA_PROXY_ENABLED: value }, path: idsPath() });
     assertSafeErrorResponse(res, 503);
     assert.equal(calls.length, 0);
+    assert.equal(dataCalls.length, 0);
   }
   for (const value of ["true", "1", ""]) {
     const { res } = await run({ env: { ...ENV, MEDIA_PROXY_ENABLED: value }, path: idsPath() });
@@ -289,9 +299,10 @@ test("kill switch disables the proxy without contacting Kobo", async () => {
 });
 
 test("missing Kobo token fails closed without contacting Kobo", async () => {
-  const { res, calls, lines } = await run({ env: { API_KEY }, path: idsPath() });
+  const { res, calls, dataCalls, lines } = await run({ env: { API_KEY }, path: idsPath() });
   assertSafeErrorResponse(res, 503);
   assert.equal(calls.length, 0);
+  assert.equal(dataCalls.length, 0);
   assert.match(lines.join("\n"), /missing_token/);
 });
 

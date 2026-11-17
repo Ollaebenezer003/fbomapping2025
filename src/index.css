@@ -1056,6 +1056,71 @@ body {
   transform: scale(1.2);
 }
 
+/* Unavailable image state (full-screen view and image section) */
+.imageUnavailable {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: min(360px, 80vw);
+  padding: 32px 28px;
+  border-radius: 12px;
+  background: #ffffff;
+  color: #333333;
+  text-align: center;
+  cursor: default;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+
+.imageUnavailableInline {
+  width: 100%;
+  min-width: 0;
+  padding: 20px 16px;
+  background: #f5f6f8;
+  box-shadow: none;
+}
+
+.imageUnavailableIcon {
+  width: 36px;
+  height: 36px;
+  color: #8a9099;
+  margin-bottom: 4px;
+}
+
+.imageUnavailableTitle {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.imageUnavailableText {
+  margin: 0;
+  font-size: 14px;
+  color: #5f6670;
+}
+
+.imageUnavailableClose {
+  margin-top: 12px;
+  padding: 8px 20px;
+  border: none;
+  border-radius: 8px;
+  background: #1f2933;
+  color: #ffffff;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.imageUnavailableClose:hover,
+.imageUnavailableClose:focus-visible {
+  background: #3e4c59;
+}
+
+.imageWrapper:focus-visible {
+  outline: 3px solid #4c9aff;
+  outline-offset: 2px;
+}
+
 .modalTableSection {
   display: flex;
   flex-direction: row;

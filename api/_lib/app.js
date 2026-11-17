@@ -4,6 +4,11 @@ import process from "node:process";
 import { mapRecordChoices } from "./choiceMapper.js";
 import { fetchAllKoboData } from "./kobo.js";
 import { createMediaHandler } from "./media.js";
+import {
+  createAttachmentIndex,
+  createAttachmentPolicy,
+  projectAuthorisedAttachments,
+} from "./attachmentIndex.js";
 import { guardedGet } from "./safeHttp.js";
 
 const ALLOWED_ORIGINS = ["https://fbomapping2025.vercel.app", "http://localhost:5173"];
@@ -13,12 +18,35 @@ function safeCode(value) {
   return /^[A-Za-z0-9_]{1,60}$/.test(s) ? s : "unknown";
 }
 
+function hasOwn(obj, key) {
+  return Object.prototype.hasOwnProperty.call(obj, key);
+}
+
 /**
  * Build the API application. Dependencies are injectable so the security
  * tests can run without network access; production uses the defaults.
+ * `indexOptions` (clock, timer, limits) and `policyOptions` are for tests only.
  */
-export function createApp({ get = guardedGet, env = process.env, log = console } = {}) {
+export function createApp({
+  get = guardedGet,
+  env = process.env,
+  log = console,
+  now = Date.now,
+  indexOptions = {},
+  policyOptions = {},
+} = {}) {
   const app = express();
+
+  // D31: one policy and one per-instance attachment index.
+  const policy = createAttachmentPolicy({ env, ...policyOptions });
+  const index = createAttachmentIndex({
+    get,
+    getToken: () => env.KOBO_TOKEN,
+    policy,
+    now,
+    log,
+    ...indexOptions,
+  });
 
   app.use(
     cors({
@@ -30,7 +58,8 @@ export function createApp({ get = guardedGet, env = process.env, log = console }
 
   app.use(express.json());
 
-  // GET FACILITIES (response shape unchanged)
+  // GET FACILITIES. Response shape unchanged except `_attachments`, which
+  // holds only authorised attachments with only `uid`, `id` and `mimetype`.
   app.get("/facilities", async (req, res) => {
     try {
       const origin = req.headers.origin;
@@ -47,15 +76,22 @@ export function createApp({ get = guardedGet, env = process.env, log = console }
 
       log.log("KOBO TOKEN:", env.KOBO_TOKEN ? "Loaded" : "Missing");
 
+      const readStartedAt = now();
       const raw = await fetchAllKoboData({ get, token: env.KOBO_TOKEN });
 
+      // Reuse this fresh read for the index (same age rule and order rule).
+      index.offer(raw, readStartedAt);
+
       const cleaned = raw.map((rec) => {
+        let mapped;
         try {
-          return mapRecordChoices(rec);
+          mapped = mapRecordChoices(rec);
         } catch {
           log.error("[facilities] record_mapping_error");
-          return rec;
+          mapped = rec;
         }
+        if (mapped === null || typeof mapped !== "object" || !hasOwn(mapped, "_attachments")) return mapped;
+        return { ...mapped, _attachments: projectAuthorisedAttachments(rec, policy) };
       });
 
       res.setHeader("Cache-Control", "public, max-age=0, s-maxage=300, stale-while-revalidate=300");
@@ -68,7 +104,7 @@ export function createApp({ get = guardedGet, env = process.env, log = console }
   });
 
   // MEDIA PROXY
-  const mediaHandler = createMediaHandler({ get, env, log });
+  const mediaHandler = createMediaHandler({ get, index, env, log });
   app.all("/media", async (req, res) => {
     const origin = req.headers.origin;
     // Requests without an Origin header (e.g. <img>) are allowed.

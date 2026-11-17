@@ -25,8 +25,28 @@ const R1 = {
   "facility_service_delivery/facility_funding_source": "Grants Cash_Donations",
   "collect_gps/final_geopoint": "5.03 7.92 60 5",
   _geolocation: [5.03, 7.92],
-  _attachments: [{ uid: "attAAAAAAAAAAAAAAAAAAAAA", mimetype: "image/jpeg" }],
+  _attachments: [
+    {
+      uid: "attAAAAAAAAAAAAAAAAAAAAA",
+      id: 501,
+      mimetype: "image/jpeg",
+      question_xpath: "facility_pictures/facility_picture",
+      filename: "synthetic_user/attachments/x/photo.jpg",
+      download_url: `https://kf.kobotoolbox.org/api/v2/assets/${KOBO_ASSET_UID}/data/1001/attachments/attAAAAAAAAAAAAAAAAAAAAA/`,
+    },
+  ],
 };
+// D31: `/facilities` keeps only authorised attachments, with only uid, id
+// and mimetype. Every other field is unchanged.
+const project = (rec) =>
+  Array.isArray(rec._attachments)
+    ? {
+        ...rec,
+        _attachments: rec._attachments
+          .filter((a) => a.question_xpath === "facility_pictures/facility_picture")
+          .map(({ uid, id, mimetype }) => ({ uid, id, mimetype })),
+      }
+    : rec;
 const R2 = { _id: 1002, "state_and_lga/state": "FCT", "category_of_fbo/fbo_category": "Facility", _attachments: [] };
 const R3 = { _id: 1003, "state_and_lga/state": "Lagos", "fbo_details/name_of_facility": "Test_Facility One" };
 
@@ -103,14 +123,14 @@ test("page cap is enforced by fetchAllKoboData (direct, bounded)", { timeout: 10
   assert.equal(calls.length, 3);
 });
 
-test("multi-page output is identical to the previous ETL (concatenate, then map choices)", async () => {
+test("multi-page output is identical to the previous ETL (concatenate, map choices, then D31 projection)", async () => {
   const next = `${BASE}?format=json&limit=2&start=2`;
   const { res, calls } = await run((url) =>
     url === KOBO_DATA_URL ? jsonPage({ results: [R1, R2], next }) : jsonPage({ results: [R3], next: null }),
   );
   assert.equal(res.status, 200);
   assert.equal(res.headers["cache-control"], "public, max-age=0, s-maxage=300, stale-while-revalidate=300");
-  const expected = JSON.parse(JSON.stringify([R1, R2, R3].map(mapRecordChoices)));
+  const expected = JSON.parse(JSON.stringify([R1, R2, R3].map(mapRecordChoices).map(project)));
   assert.deepEqual(JSON.parse(res.body.toString()), expected);
   assert.deepEqual(calls.map((c) => c.url), [KOBO_DATA_URL, next]);
   for (const c of calls) assert.equal(c.opts.headers.Authorization, `Token ${TOKEN}`);

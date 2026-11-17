@@ -4,6 +4,10 @@
 // (`sid`, `aid`, `size`) or, for compatibility with cached clients, by a
 // canonical legacy `url=` value that is parsed and rebuilt. The upstream URL
 // is always constructed server-side; the Kobo token is only ever sent to it.
+//
+// D31: before any image request, the attachment must be in a fresh
+// authorised attachment index (attachmentIndex.js). No fresh index gives
+// 503. A miss in a fresh index gives 404 with no Kobo request.
 
 import { Buffer } from "node:buffer";
 import process from "node:process";
@@ -16,6 +20,9 @@ import {
 
 export const MEDIA_MAX_BYTES = 4 * 1024 * 1024; // under Vercel's 4.5 MB response limit
 export const MEDIA_TIMEOUT_MS = 8000;
+export const MAX_QUERY_LENGTH = 2300;
+// Browser-only cache. No shared (edge) cache: no s-maxage (D31, OD-2).
+export const MEDIA_SUCCESS_CACHE_CONTROL = "private, max-age=300";
 
 const EXTENSIONS = Object.freeze({ "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" });
 const TYPE_ALIASES = Object.freeze({ "image/jpg": "image/jpeg", "image/pjpeg": "image/jpeg" });
@@ -79,28 +86,41 @@ function hasOwn(obj, key) {
   return Object.prototype.hasOwnProperty.call(obj, key);
 }
 
-/** Resolve the request to a validated attachment reference, or null. */
-export function readAttachmentRef(query) {
-  const q = query ?? {};
-  const idKeys = ["sid", "aid", "size"];
-  const usesIds = idKeys.some((k) => hasOwn(q, k));
-  const usesUrl = hasOwn(q, "url");
-  if (usesIds && usesUrl) return null; // ambiguous
-  if (usesIds) {
-    const ref = {};
-    for (const key of idKeys) {
-      if (typeof q[key] !== "string") return null; // missing or repeated
-      ref[key] = q[key];
-    }
+/** The raw query string of a request URL ("" if none). */
+export function rawQueryString(originalUrl) {
+  const s = typeof originalUrl === "string" ? originalUrl : "";
+  const i = s.indexOf("?");
+  return i === -1 ? "" : s.slice(i + 1);
+}
+
+const ID_KEYS = Object.freeze(["sid", "aid", "size"]);
+
+/**
+ * Strict query parse (D31 3.5). Keys and values come from one
+ * URLSearchParams parse of the raw query string; `req.query` is not used.
+ * Allowed forms: exactly `sid`, `aid`, `size`; or exactly `url` with an
+ * optional `key`. Each key once. Anything else gives null (400).
+ *
+ * The legacy `key` value is never read, compared, logged or sent upstream.
+ */
+export function readAttachmentRef(rawQuery) {
+  if (typeof rawQuery !== "string" || rawQuery.length === 0 || rawQuery.length > MAX_QUERY_LENGTH) return null;
+  const params = new URLSearchParams(rawQuery);
+  const keys = [...params.keys()];
+  if (new Set(keys).size !== keys.length) return null; // repeated key
+  const keySet = new Set(keys);
+  const isIdForm = keys.length === ID_KEYS.length && ID_KEYS.every((k) => keySet.has(k));
+  const isLegacyForm =
+    keySet.has("url") && keys.every((k) => k === "url" || k === "key") && keys.length <= 2;
+  if (isIdForm) {
+    const ref = { sid: params.get("sid"), aid: params.get("aid"), size: params.get("size") };
     return isValidAttachmentRef(ref) ? ref : null;
   }
-  if (usesUrl) {
-    return typeof q.url === "string" ? parseLegacyAttachmentUrl(q.url) : null;
-  }
+  if (isLegacyForm) return parseLegacyAttachmentUrl(params.get("url"));
   return null;
 }
 
-export function createMediaHandler({ get, env = process.env, log = console }) {
+export function createMediaHandler({ get, index, env = process.env, log = console }) {
   return async function mediaHandler(req, res) {
     if (req.method !== "GET" && req.method !== "HEAD") {
       res.set("Allow", "GET, HEAD");
@@ -117,8 +137,20 @@ export function createMediaHandler({ get, env = process.env, log = console }) {
       return sendError(res, 503, "Images are temporarily unavailable");
     }
 
-    const ref = readAttachmentRef(req.query);
+    const ref = readAttachmentRef(rawQueryString(req.originalUrl ?? req.url));
     if (!ref) return sendError(res, 400, "Invalid image reference");
+
+    // Refresh before membership: only a fresh index is used.
+    let fresh;
+    try {
+      if (!index) throw Object.assign(new Error("no_index"), { code: "no_index" });
+      fresh = await index.getFreshIndex();
+    } catch (err) {
+      log.warn(`[media] index_unavailable code=${safeToken(err?.code)}`);
+      return sendError(res, 503, "Images are temporarily unavailable");
+    }
+    // A fresh miss: 404, no data read and no image request.
+    if (!fresh.has(ref.sid, ref.aid)) return sendError(res, 404, "Image not found");
 
     let upstream;
     try {
@@ -142,7 +174,7 @@ export function createMediaHandler({ get, env = process.env, log = console }) {
       log.warn(`[media] upstream_redirect_rejected status=${status} host=${redirectHost(upstream.headers?.location)}`);
       return sendError(res, 502, "Failed to load image");
     }
-    if (status === 404) return sendError(res, 404, "Image not found");
+    if (status === 404 || status === 410) return sendError(res, 404, "Image not found");
     if (status === 401 || status === 403) {
       log.error(`[media] kobo_auth_failure status=${status}`);
       return sendError(res, 502, "Failed to load image");
@@ -173,7 +205,7 @@ export function createMediaHandler({ get, env = process.env, log = console }) {
       "X-Content-Type-Options": "nosniff",
       "Content-Security-Policy": "default-src 'none'; sandbox",
       "Content-Disposition": `inline; filename="photo.${EXTENSIONS[declared]}"`,
-      "Cache-Control": "public, max-age=3600, s-maxage=86400",
+      "Cache-Control": MEDIA_SUCCESS_CACHE_CONTROL,
       "Referrer-Policy": "no-referrer",
     });
     return req.method === "HEAD" ? res.end() : res.end(body);
