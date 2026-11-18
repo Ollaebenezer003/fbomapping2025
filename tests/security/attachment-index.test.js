@@ -215,26 +215,45 @@ test("OPS-070 deletion policy: ambiguous identifiers in one record are refused i
   assert.deepEqual(projectAuthorisedAttachments(rec, POLICY), [{ uid: UID_C, id: 3, mimetype: "image/jpeg" }]);
 });
 
-test("OPS-070: the deletion policy is not approved for deployed use; only a code constant approves it", () => {
-  assert.equal(DELETION_POLICY_APPROVED, false, "owner approval is not recorded in code");
-  // Production, Preview and unknown environments are blocked by default.
-  for (const env of [{}, { VERCEL_ENV: "production" }, { VERCEL_ENV: "preview" }, { VERCEL: "1" }]) {
-    assert.equal(createAttachmentPolicy({ env }).releaseBlocked, true, JSON.stringify(env));
+test("OD-21: the deletion policy is approved by the code constant; no environment variable changes the gate", () => {
+  assert.equal(DELETION_POLICY_APPROVED, true, "OD-21 approval is recorded in code");
+  // Approved: Production, Preview and unknown environments use the policy.
+  for (const env of [{}, null, { VERCEL_ENV: "production" }, { VERCEL_ENV: "preview" }, { VERCEL: "1" }]) {
+    const policy = createAttachmentPolicy({ env });
+    assert.equal(policy.releaseBlocked, false, JSON.stringify(env));
+    assert.ok(Object.isFrozen(policy), "the policy cannot be changed after creation");
   }
-  // No environment variable approves it, also with a guessed flag name.
+  assert.equal(createAttachmentPolicy().releaseBlocked, false);
+  // Environment variables cannot withdraw or replace the approval, or the check.
+  for (const env of [
+    { VERCEL_ENV: "production", DELETION_POLICY_APPROVED: "false" },
+    { VERCEL_ENV: "production", D31_DELETION_POLICY_APPROVED: "0" },
+    { VERCEL_ENV: "production", D31_LOCAL_PROVISIONAL: "0" },
+    { VERCEL_ENV: "production", isDeleted: "false", releaseBlocked: "true" },
+  ]) {
+    const policy = createAttachmentPolicy({ env });
+    assert.equal(policy.releaseBlocked, false, JSON.stringify(env));
+    assert.equal(policy.isDeleted, hasDeletionIndicator, JSON.stringify(env));
+  }
+
+  // The block mechanism still works if the code constant is set to false.
+  for (const env of [{}, { VERCEL_ENV: "production" }, { VERCEL_ENV: "preview" }, { VERCEL: "1" }]) {
+    assert.equal(createAttachmentPolicy({ env, deletionPolicyApproved: false }).releaseBlocked, true, JSON.stringify(env));
+  }
+  // With the constant false, no environment variable approves it.
   for (const env of [
     { VERCEL_ENV: "production", D31_LOCAL_PROVISIONAL: "1" },
     { VERCEL_ENV: "production", DELETION_POLICY_APPROVED: "true" },
     { VERCEL_ENV: "production", D31_DELETION_POLICY_APPROVED: "1" },
   ]) {
-    assert.equal(createAttachmentPolicy({ env }).releaseBlocked, true, JSON.stringify(env));
+    assert.equal(createAttachmentPolicy({ env, deletionPolicyApproved: false }).releaseBlocked, true, JSON.stringify(env));
   }
   // Only the exact value true counts as approval.
-  for (const value of ["true", 1, "1", {}, null, undefined]) {
+  for (const value of ["true", 1, "1", {}, null, false]) {
     assert.equal(isDeletionRuleReleaseBlocked({ VERCEL_ENV: "production" }, value), true, String(value));
   }
   // After approval the same policy (not a separate mode) applies everywhere.
-  const approved = createAttachmentPolicy({ env: { VERCEL_ENV: "production" }, deletionPolicyApproved: true });
+  const approved = createAttachmentPolicy({ env: { VERCEL_ENV: "production" } });
   assert.equal(approved.releaseBlocked, false);
   assert.equal(approved.isDeleted, hasDeletionIndicator);
   assert.equal(createAttachmentPolicy({ env: LOCAL_ENV }).isDeleted, hasDeletionIndicator, "local runs use the same check");
@@ -242,7 +261,7 @@ test("OPS-070: the deletion policy is not approved for deployed use; only a code
   assert.deepEqual(projectAuthorisedAttachments(marked, approved), [{ uid: UID_B, mimetype: "image/jpeg" }]);
 });
 
-test("H-1 and M-1: the unapproved deletion policy is blocked by default in every environment", () => {
+test("H-1 and M-1: if not approved, the deletion policy is blocked in every environment except the local opt-in", () => {
   const blockedEnvs = [
     ["no environment variables", {}],
     ["null environment", null],
@@ -269,8 +288,8 @@ test("H-1 and M-1: the unapproved deletion policy is blocked by default in every
 
   for (const [label, env] of blockedEnvs) {
     assert.equal(isLocalProvisionalAllowed(env), false, label);
-    assert.equal(isDeletionRuleReleaseBlocked(env), true, label);
-    const policy = createAttachmentPolicy({ env });
+    assert.equal(isDeletionRuleReleaseBlocked(env, false), true, label);
+    const policy = createAttachmentPolicy({ env, deletionPolicyApproved: false });
     assert.equal(policy.releaseBlocked, true, label);
     const rec = recordA();
     assert.equal(isAuthorisedAttachment(rec, rec._attachments[0], policy), false, label);
@@ -280,18 +299,18 @@ test("H-1 and M-1: the unapproved deletion policy is blocked by default in every
   // Explicit local opt-in, with or without a local NODE_ENV.
   for (const env of [LOCAL_ENV, { ...LOCAL_ENV, NODE_ENV: "development" }, { ...LOCAL_ENV, NODE_ENV: "test" }]) {
     assert.equal(isLocalProvisionalAllowed(env), true, JSON.stringify(env));
-    assert.equal(createAttachmentPolicy({ env }).releaseBlocked, false);
+    assert.equal(createAttachmentPolicy({ env, deletionPolicyApproved: false }).releaseBlocked, false);
   }
   // An approved policy is not blocked. This is a code
   // constant, not an environment flag: there is no Production bypass flag.
   assert.equal(isDeletionRuleReleaseBlocked({ VERCEL_ENV: "production" }, true), false);
-  // The default policy (no env argument) is blocked.
-  assert.equal(createAttachmentPolicy().releaseBlocked, true);
+  // An unapproved policy with no env argument is blocked.
+  assert.equal(createAttachmentPolicy({ deletionPolicyApproved: false }).releaseBlocked, true);
 });
 
-test("release block: the index refuses without any Kobo request", async () => {
+test("release block (constant false): the index refuses without any Kobo request", async () => {
   for (const env of [{}, { VERCEL: "1" }, { VERCEL_ENV: "production" }, { VERCEL_ENV: "preview" }, { ...LOCAL_ENV, VERCEL: "1" }]) {
-    const { clock, stub, index } = setup({ policy: createAttachmentPolicy({ env }) });
+    const { clock, stub, index } = setup({ policy: createAttachmentPolicy({ env, deletionPolicyApproved: false }) });
     await rejectsWith(index.getFreshIndex(), "release_blocked");
     assert.equal(index.offer([recordA()], clock.now()), false);
     assert.equal(stub.calls.length, 0, JSON.stringify(env));
@@ -688,7 +707,7 @@ test("D31-T16 (index): the index sends only data-page GETs and holds no record c
   const { stub, index } = setup();
   const idx = await index.getFreshIndex();
   assert.ok(stub.calls.every((c) => c.url.startsWith(KOBO_DATA_URL.split("?")[0])));
-  assert.deepEqual(Object.keys(idx).sort(), ["attachmentCount", "has", "ids", "readStartedAt"]);
+  assert.deepEqual(Object.keys(idx).sort(), ["attachmentCount", "has", "ids", "readStartedAt", "recordMarkerRefusals"]);
   assert.ok(Object.isFrozen(idx));
 });
 

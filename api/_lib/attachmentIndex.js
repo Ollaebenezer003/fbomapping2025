@@ -185,12 +185,14 @@ export function projectAuthorisedAttachments(record, policy) {
     });
 }
 
-function makeIndex(entries, readStartedAt) {
+function makeIndex(entries, readStartedAt, recordMarkerRefusals = 0) {
   let count = 0;
   for (const set of entries.values()) count += set.size;
   return Object.freeze({
     readStartedAt,
     attachmentCount: count,
+    // Aggregate only (RV-B): records refused by the record-level A-5 check.
+    recordMarkerRefusals,
     has(sid, aid) {
       const set = entries.get(String(sid));
       return set !== undefined && set.has(String(aid));
@@ -211,8 +213,10 @@ export function buildIndexFromRecords(records, readStartedAt, policy) {
   if (!Array.isArray(records)) throw codeError("malformed_data");
   if (records.length === 0) throw codeError("empty_data");
   const entries = new Map();
+  let recordMarkerRefusals = 0;
   for (const record of records) {
     if (!isPlainObject(record)) throw codeError("malformed_record");
+    if (hasRecordDeletionIndicator(record)) recordMarkerRefusals += 1;
     if (!Array.isArray(record._attachments)) continue;
     const sid = recordSubmissionId(record);
     for (const attachment of authorisedAttachmentsOf(record, policy)) {
@@ -221,7 +225,7 @@ export function buildIndexFromRecords(records, readStartedAt, policy) {
       for (const id of attachmentIdentifiers(attachment)) set.add(id);
     }
   }
-  return makeIndex(entries, readStartedAt);
+  return makeIndex(entries, readStartedAt, recordMarkerRefusals);
 }
 
 function defaultSetTimer(fn, ms) {
@@ -356,6 +360,8 @@ export function createAttachmentIndex({
           build.settled = true;
           if (inflight === build) inflight = null;
           lastFailureAt = null;
+          // Counts only. No identifier, file name or record content.
+          log.info(`[index] built ids=${current.attachmentCount} record_marker_refusals=${current.recordMarkerRefusals}`);
           resolveWaiters(current);
         },
         (err) => {

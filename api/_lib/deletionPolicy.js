@@ -22,16 +22,21 @@
 // cannot detect a Kobo deletion that leaves the attachment in
 // `_attachments` with no indicator. That condition is unresolved.
 //
-// Release control: `DELETION_POLICY_APPROVED` is a code constant. While it
-// is false, every deployed or unknown environment is blocked (no photo is
-// authorised and /media gives 503). Only a local run with
-// `D31_LOCAL_PROVISIONAL=1` and no deployment indicator may use the policy
-// before approval. There is no environment flag that unblocks Production.
-// Set the constant to true only in a reviewed commit after the owner
-// approves this policy and accepts its residual risk.
+// Release control: `DELETION_POLICY_APPROVED` is a code constant. The owner
+// approved this policy for Production on 2026-11-17 (OD-21, OPS-071) and
+// accepted the residual risk that Kobo may keep a deleted attachment in
+// `_attachments` with no detectable marker. The approval covers the
+// authorised public facility photographs only. It does not verify Kobo
+// deletion semantics (RC-12 discontinued, not passed).
+//
+// No environment variable, request value or header can change the gate.
+// If the constant is set back to false, every deployed or unknown
+// environment is blocked again (no photo is authorised and /media gives
+// 503). Only a local run with `D31_LOCAL_PROVISIONAL=1` and no deployment
+// indicator may then use the policy.
 
 export const DELETION_POLICY_ID = "RC9_METADATA_1";
-export const DELETION_POLICY_APPROVED = false;
+export const DELETION_POLICY_APPROVED = true; // OD-21
 
 // Key names that refer to deletion, trash or removal. Matched without case.
 const DELETION_KEY_RE = /delet|trash|remov|purg|discard/i;

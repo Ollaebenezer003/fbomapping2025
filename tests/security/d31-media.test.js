@@ -369,8 +369,8 @@ test("OPS-070: Production deletion policy through /media and /facilities with mo
   const mutate = (fn) =>
     records().map((r) => (r._id === Number(SID) ? { ...r, _attachments: r._attachments.map(fn) } : r));
 
-  // Not approved: Production serves no photo and lists none, with no Kobo request.
-  const blocked = await session({ env: PROD });
+  // If the constant were false: Production serves no photo, with no Kobo request.
+  const blocked = await session({ env: PROD, policyOptions: { deletionPolicyApproved: false } });
   try {
     assertNoStoreError(await blocked.request(idsPath(SID, UID_1)), 503);
     assert.equal(blocked.stub.calls.length, 0);
@@ -378,9 +378,22 @@ test("OPS-070: Production deletion policy through /media and /facilities with mo
     await blocked.close();
   }
 
-  // Approved (simulated by the code constant): the same policy applies.
-  const s = await session({ env: PROD, policyOptions: { deletionPolicyApproved: true } });
+  // OD-21: the default (the real code constant) is approved in Production.
+  const s = await session({ env: PROD });
   try {
+    // A public request cannot change the gate or the policy.
+    assertNoStoreError(await s.request(`${idsPath(SID, MARKED)}&DELETION_POLICY_APPROVED=false`), 400);
+    assertNoStoreError(await s.request(`${idsPath(SID, MARKED)}&releaseBlocked=false&isDeleted=false`), 400);
+    assertNoStoreError(
+      await s.request(idsPath(SID, MARKED), { headers: { "X-Deletion-Policy-Approved": "true", "X-D31-Local-Provisional": "1" } }),
+      404,
+    );
+    const tampered = JSON.parse(
+      (await s.request(`/facilities?key=${API_KEY}&DELETION_POLICY_APPROVED=false&D31_LOCAL_PROVISIONAL=1`)).body.toString(),
+    );
+    const tamperedIds = tampered.find((r) => r._id === Number(SID))._attachments.map((a) => a.uid);
+    assert.deepEqual(tamperedIds, [UID_1, UID_2, UID_3], "gate unchanged; marked photo still refused");
+
     assert.equal((await s.request(idsPath(SID, UID_1, "large"))).status, 200, "active photo served");
     assert.equal((await s.request(idsPath(SID, UID_3))).status, 200, "is_deleted=false with membership is served");
     assertNoStoreError(await s.request(idsPath(SID, MARKED)), 404);
@@ -414,6 +427,12 @@ test("OPS-070: Production deletion policy through /media and /facilities with mo
       s.clock.advance(INDEX_MAX_AGE_MS + 1);
       assert.equal((await s.request(idsPath(SID, UID_1))).status, 200, `${label}: restored control`);
     }
+
+    // The build log has counts only.
+    const built = s.lines.filter((l) => l.includes("[index] built"));
+    assert.ok(built.length > 0);
+    for (const line of built) assert.match(line, /^info \[index\] built ids=\d+ record_marker_refusals=\d+$/);
+    assert.ok(built.some((l) => l.endsWith("record_marker_refusals=1")), "P-5 refusal is counted");
 
     // An expired index is never used: a failed refresh gives 503 with no image request.
     s.stub.state.records = "not an array";
@@ -507,7 +526,7 @@ const IMAGE_ANSWER_RECORDS = () =>
       : r,
   );
 
-test("H-1 and M-1: blocked environments: /media 503 with no upstream request; /facilities lists no attachment", async () => {
+test("H-1 and M-1 (constant false): blocked environments: /media 503 with no upstream request; /facilities lists no attachment", async () => {
   const blocked = [
     {},
     { VERCEL: "1" },
@@ -523,7 +542,7 @@ test("H-1 and M-1: blocked environments: /media 503 with no upstream request; /f
   ];
   for (const extra of blocked) {
     const label = JSON.stringify(extra);
-    const s = await session({ env: { KOBO_TOKEN: TOKEN, API_KEY, ...extra }, recs: IMAGE_ANSWER_RECORDS() });
+    const s = await session({ env: { KOBO_TOKEN: TOKEN, API_KEY, ...extra }, recs: IMAGE_ANSWER_RECORDS(), policyOptions: { deletionPolicyApproved: false } });
     try {
       for (const path of [idsPath(SID, UID_1), idsPath(SID, "11", "large"), legacyPath(SID, UID_2, "medium")]) {
         assertNoStoreError(await s.request(path), 503);
