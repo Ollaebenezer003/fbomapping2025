@@ -289,14 +289,16 @@ export function createAttachmentIndex({
     t >= idx.readStartedAt && t - idx.readStartedAt <= maxAgeMs &&
     m >= idx.readStartedMono && m - idx.readStartedMono <= maxAgeMs;
 
-  // F-1: read start of the newest complete read that emptied the index. A
-  // read that started at or before it is never installed afterwards.
+  // F-1: monotonic read start of the newest complete read that emptied the
+  // index. A read that started at or before it is never installed
+  // afterwards. Read order uses the monotonic stamp, which cannot move back,
+  // so a wall-clock step never resets it.
   let orderFloor = -Infinity;
 
   function install(idx, gen) {
     dropFutureState(now());
-    if (idx.readStartedAt <= orderFloor) return false; // older than an emptied read
-    if (current && idx.readStartedAt <= current.readStartedAt) return false; // older or equal result
+    if (idx.readStartedMono <= orderFloor) return false; // older than an emptied read
+    if (current && idx.readStartedMono <= current.readStartedMono) return false; // older or equal result
     current = idx;
     installedGeneration = gen;
     return true;
@@ -305,7 +307,7 @@ export function createAttachmentIndex({
   // F-2: best-effort detection of a wall clock that moves back (the monotonic
   // age check in isFresh is the main control). When a time earlier than one
   // already seen appears, wall times before it cannot be compared: the
-  // installed index is dropped, the backoff and the order floor end, and a
+  // installed index is dropped, the backoff ends, and a
   // build that started before the step is not used. The 300 s maximum age is
   // not changed.
   let highWater = -Infinity;
@@ -313,7 +315,6 @@ export function createAttachmentIndex({
   function dropFutureState(t) {
     if (t < highWater) {
       clockEpoch += 1;
-      orderFloor = -Infinity;
       if (current) log.warn("[index] clock_rollback_index_invalidated");
       current = null;
       lastFailureAt = null;
@@ -329,9 +330,9 @@ export function createAttachmentIndex({
   // malformed read never reaches this check, so it never invalidates.
   function checkNotEmptied(idx) {
     if (idx.attachmentCount === 0 && current && current.attachmentCount > 0) {
-      if (idx.readStartedAt > current.readStartedAt) {
+      if (idx.readStartedMono > current.readStartedMono) {
         current = null;
-        orderFloor = Math.max(orderFloor, idx.readStartedAt);
+        orderFloor = Math.max(orderFloor, idx.readStartedMono);
         log.warn("[index] emptied_read_index_invalidated");
       }
       throw codeError("no_authorised_attachments");

@@ -52,6 +52,7 @@ function setup({ records = [recordA(), recordB()], dataResponder, ...opts } = {}
     getToken: () => TOKEN,
     policy: POLICY,
     now: clock.now,
+    monoNow: clock.now, // same manual clock unless a test injects its own monotonic clock
     setTimer: clock.setTimer,
     log,
     ...opts,
@@ -825,6 +826,24 @@ test("F-2 (dual clock): an offer is checked on both stamps", async () => {
   assert.equal(index.offer([recordA()], clock.now(), mono.monoNow() - INDEX_MAX_AGE_MS - 1), false, "old monotonic stamp");
   assert.equal(index.offer([recordA()], clock.now() - INDEX_MAX_AGE_MS - 1, mono.monoNow()), false, "old wall stamp");
   assert.equal(index.offer([recordA()], clock.now(), mono.monoNow()), true);
+});
+
+test("F-1 (race, wall step back): the order floor uses the monotonic stamp and survives a wall-clock step", async () => {
+  const mono = monoClock();
+  const { clock, index } = setup({ monoNow: mono.monoNow });
+  const both = (ms) => { clock.advance(ms); mono.advance(ms); };
+  assert.equal(index.offer([recordA(), recordB()], clock.now(), mono.monoNow()), true);
+  both(1_000);
+  const readA = [clock.now(), mono.monoNow()]; // read A starts (photos)
+  both(1_000);
+  assert.equal(index.offer(allRefused(), clock.now(), mono.monoNow()), false); // newer read B: empty
+  assert.equal(index.inspect().hasIndex, false);
+  clock.advance(-500); // wall steps back; A's wall stamp still looks fresh
+  mono.advance(10);
+  assert.equal(index.offer([recordA(), recordB()], ...readA), false, "older read A stays refused");
+  assert.equal(index.inspect().hasIndex, false);
+  both(1);
+  assert.equal(index.offer([recordA(), recordB()], clock.now(), mono.monoNow()), true, "a later read installs");
 });
 
 test("F-1 (race): after an emptied read, an older in-flight result is never installed", async () => {
