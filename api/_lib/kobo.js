@@ -18,8 +18,10 @@ export const KOBO_DATA_PATH = `/api/v2/assets/${KOBO_ASSET_UID}/data/`;
 export const KOBO_PAGE_SIZE = 1000;
 export const KOBO_DATA_URL = `${KOBO_ORIGIN}${KOBO_DATA_PATH}?format=json&limit=${KOBO_PAGE_SIZE}`;
 
-export const SUBMISSION_ID_RE = /^\d{1,12}$/;
-export const ATTACHMENT_ID_RE = /^(?:att[A-Za-z0-9]{8,64}|\d{1,12})$/;
+// Numeric IDs must be canonical (no leading zero), so that one attachment or
+// record has exactly one accepted spelling (D31 F-3).
+export const SUBMISSION_ID_RE = /^(?:0|[1-9]\d{0,11})$/;
+export const ATTACHMENT_ID_RE = /^(?:att[A-Za-z0-9]{8,64}|0|[1-9]\d{0,11})$/;
 export const ATTACHMENT_SIZES = Object.freeze(["small", "medium", "large"]);
 export const MAX_REFERENCE_URL_LENGTH = 2048;
 
@@ -30,7 +32,7 @@ export const MAX_REFERENCE_URL_LENGTH = 2048;
 export const MAX_KOBO_PAGES = 100;
 
 const LEGACY_ATTACHMENT_PATH_RE = new RegExp(
-  `^/api/v2/assets/${KOBO_ASSET_UID}/data/(\\d{1,12})/attachments/(att[A-Za-z0-9]{8,64}|\\d{1,12})/(small|medium|large)/$`,
+  `^/api/v2/assets/${KOBO_ASSET_UID}/data/(0|[1-9]\\d{0,11})/attachments/(att[A-Za-z0-9]{8,64}|0|[1-9]\\d{0,11})/(small|medium|large)/$`,
 );
 const PAGINATION_PARAMS = new Set(["format", "limit", "start"]);
 const PRINTABLE_ASCII_RE = /^[\x21-\x7e]+$/;

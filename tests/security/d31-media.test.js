@@ -456,6 +456,47 @@ test("OPS-070: Production deletion policy through /media and /facilities with mo
   }
 });
 
+test("F-1 (end to end): a newer /facilities read with every photo deleted stops /media at once", async () => {
+  const s = await session();
+  try {
+    assert.equal((await s.request(idsPath(SID, UID_1))).status, 200);
+    s.clock.advance(100_000); // the first index is still fresh
+    s.stub.state.records = records().map((r) => ({
+      ...r,
+      ...(r._attachments ? { _attachments: r._attachments.map((a) => ({ ...a, is_deleted: true })) } : {}),
+    }));
+    const body = JSON.parse((await s.request(`/facilities?key=${API_KEY}`)).body.toString());
+    for (const r of body) assert.deepEqual(r._attachments ?? [], []);
+    const images = s.stub.imageCalls.length;
+    for (const aid of [UID_1, "11", UID_2, OTHER_UID]) {
+      const sid = aid === OTHER_UID ? OTHER_SID : SID;
+      const res = await s.request(idsPath(sid, aid));
+      assert.ok([404, 503].includes(res.status), `${aid}: ${res.status}`);
+    }
+    assert.equal(s.stub.imageCalls.length, images, "no image request after the emptied read");
+  } finally {
+    await s.close();
+  }
+});
+
+test("F-3 (end to end): non-canonical numeric identifiers are rejected before any Kobo request", async () => {
+  const s = await session();
+  try {
+    for (const path of [
+      idsPath(SID, "011"),
+      idsPath("0424242", UID_1),
+      `/media?url=${encodeURIComponent(attachmentUrl(SID, "011", "small"))}`,
+      `/media?url=${encodeURIComponent(attachmentUrl("0424242", UID_1, "small"))}`,
+    ]) {
+      assertNoStoreError(await s.request(path), 400);
+    }
+    assert.equal(s.stub.calls.length, 0);
+    assert.equal((await s.request(idsPath(SID, "11"))).status, 200, "canonical control");
+  } finally {
+    await s.close();
+  }
+});
+
 test("D31-T15: kill switch and missing token: no index build and no Kobo request", async () => {
   for (const env of [{ ...ENV, MEDIA_PROXY_ENABLED: "false" }, { API_KEY, ...LOCAL_ENV }]) {
     const s = await session({ env });

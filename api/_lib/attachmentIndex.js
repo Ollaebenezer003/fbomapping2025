@@ -14,6 +14,7 @@
 // no stale use. When no fresh index is available, callers get an
 // `IndexUnavailableError` and must answer 503.
 
+import { performance } from "node:perf_hooks";
 import { fetchAllKoboData } from "./kobo.js";
 import {
   DELETION_POLICY_APPROVED,
@@ -37,9 +38,10 @@ export const PHOTO_QUESTION_XPATHS = Object.freeze([
   "organisation_pictures/organisation_picture",
 ]);
 
-const RECORD_ID_RE = /^\d{1,12}$/;
+// Canonical numeric IDs only: "7" is valid, "007" is not (F-3).
+const RECORD_ID_RE = /^(?:0|[1-9]\d{0,11})$/;
 const ATTACHMENT_UID_RE = /^att[A-Za-z0-9]{8,64}$/;
-const NUMERIC_ID_RE = /^\d{1,12}$/;
+const NUMERIC_ID_RE = /^(?:0|[1-9]\d{0,11})$/;
 
 export class IndexUnavailableError extends Error {
   constructor(code) {
@@ -138,12 +140,18 @@ export function isAuthorisedAttachment(record, attachment, policy) {
 }
 
 // Every identifier-like value of an attachment, valid or not. Used only to
-// find identifiers that are ambiguous inside one record.
+// find identifiers that are ambiguous inside one record. A numeric string is
+// counted in canonical form ("007" and " 7" count as "7"), so a refused
+// non-canonical entry still makes the canonical identifier ambiguous (F-3).
 function claimedIdentifiers(attachment) {
   if (!isPlainObject(attachment)) return [];
   const out = [];
   if (typeof attachment.uid === "string") out.push(attachment.uid);
-  if (typeof attachment.id === "number" || typeof attachment.id === "string") out.push(String(attachment.id));
+  const id = attachment.id;
+  if (typeof id === "number" || typeof id === "string") {
+    const text = String(id).trim();
+    out.push(/^\d+$/.test(text) ? text.replace(/^0+(?=\d)/, "") : text);
+  }
   return out;
 }
 
@@ -185,11 +193,13 @@ export function projectAuthorisedAttachments(record, policy) {
     });
 }
 
-function makeIndex(entries, readStartedAt, recordMarkerRefusals = 0) {
+function makeIndex(entries, readStartedAt, recordMarkerRefusals = 0, readStartedMono = readStartedAt) {
   let count = 0;
   for (const set of entries.values()) count += set.size;
   return Object.freeze({
     readStartedAt,
+    // Monotonic read start (F-2). Used only for the age check in this instance.
+    readStartedMono,
     attachmentCount: count,
     // Aggregate only (RV-B): records refused by the record-level A-5 check.
     recordMarkerRefusals,
@@ -209,7 +219,7 @@ const EMPTY_INDEX = makeIndex(new Map(), Number.POSITIVE_INFINITY);
  * Build index content from Kobo records. Throws a coded error for empty or
  * malformed data. The caller decides about "zero authorised attachments".
  */
-export function buildIndexFromRecords(records, readStartedAt, policy) {
+export function buildIndexFromRecords(records, readStartedAt, policy, readStartedMono = readStartedAt) {
   if (!Array.isArray(records)) throw codeError("malformed_data");
   if (records.length === 0) throw codeError("empty_data");
   const entries = new Map();
@@ -225,7 +235,7 @@ export function buildIndexFromRecords(records, readStartedAt, policy) {
       for (const id of attachmentIdentifiers(attachment)) set.add(id);
     }
   }
-  return makeIndex(entries, readStartedAt, recordMarkerRefusals);
+  return makeIndex(entries, readStartedAt, recordMarkerRefusals, readStartedMono);
 }
 
 function defaultSetTimer(fn, ms) {
@@ -252,6 +262,10 @@ export function createAttachmentIndex({
   getToken = () => undefined,
   policy,
   now = Date.now,
+  // F-2: a second, monotonic clock. Wall-clock time counts time while an
+  // instance is frozen; monotonic time cannot move back. An index is fresh
+  // only when BOTH ages are within the maximum age.
+  monoNow = () => performance.now(),
   setTimer = defaultSetTimer,
   maxAgeMs = INDEX_MAX_AGE_MS,
   buildTimeoutMs = INDEX_BUILD_TIMEOUT_MS,
@@ -270,19 +284,56 @@ export function createAttachmentIndex({
   let generation = 0;
   let installedGeneration = 0;
 
-  const isFresh = (idx, t) => idx !== null && t - idx.readStartedAt <= maxAgeMs && t >= idx.readStartedAt;
+  const isFresh = (idx, t, m = monoNow()) =>
+    idx !== null &&
+    t >= idx.readStartedAt && t - idx.readStartedAt <= maxAgeMs &&
+    m >= idx.readStartedMono && m - idx.readStartedMono <= maxAgeMs;
+
+  // F-1: read start of the newest complete read that emptied the index. A
+  // read that started at or before it is never installed afterwards.
+  let orderFloor = -Infinity;
 
   function install(idx, gen) {
+    dropFutureState(now());
+    if (idx.readStartedAt <= orderFloor) return false; // older than an emptied read
     if (current && idx.readStartedAt <= current.readStartedAt) return false; // older or equal result
     current = idx;
     installedGeneration = gen;
     return true;
   }
 
-  // Reject a result with zero authorised attachments when the last index
-  // had some. Kobo answers in an unknown shape become [] (D31-IN4).
+  // F-2: best-effort detection of a wall clock that moves back (the monotonic
+  // age check in isFresh is the main control). When a time earlier than one
+  // already seen appears, wall times before it cannot be compared: the
+  // installed index is dropped, the backoff and the order floor end, and a
+  // build that started before the step is not used. The 300 s maximum age is
+  // not changed.
+  let highWater = -Infinity;
+  let clockEpoch = 0;
+  function dropFutureState(t) {
+    if (t < highWater) {
+      clockEpoch += 1;
+      orderFloor = -Infinity;
+      if (current) log.warn("[index] clock_rollback_index_invalidated");
+      current = null;
+      lastFailureAt = null;
+    }
+    highWater = t;
+  }
+
+  // F-1: a complete, well-formed read with zero authorised attachments,
+  // after an index that had some, is not installed (D31-IN4: it may be an
+  // unknown answer shape). If it is newer than the installed index, it still
+  // invalidates that index: no photo is served from it again (503 until a
+  // later complete read). An older read only fails. A failed, incomplete or
+  // malformed read never reaches this check, so it never invalidates.
   function checkNotEmptied(idx) {
     if (idx.attachmentCount === 0 && current && current.attachmentCount > 0) {
+      if (idx.readStartedAt > current.readStartedAt) {
+        current = null;
+        orderFloor = Math.max(orderFloor, idx.readStartedAt);
+        log.warn("[index] emptied_read_index_invalidated");
+      }
       throw codeError("no_authorised_attachments");
     }
   }
@@ -290,8 +341,10 @@ export function createAttachmentIndex({
   function startBuild() {
     const gen = ++generation;
     const readStartedAt = now();
+    const readStartedMono = monoNow();
     const deadlineAt = readStartedAt + buildTimeoutMs;
-    const build = { gen, readStartedAt, abandoned: false, settled: false };
+    dropFutureState(readStartedAt);
+    const build = { gen, readStartedAt, epoch: clockEpoch, abandoned: false, settled: false };
     let resolveWaiters;
     let rejectWaiters;
     build.promise = new Promise((resolve, reject) => {
@@ -307,12 +360,14 @@ export function createAttachmentIndex({
       // A newer fresh index was installed while this build was pending
       // (for example by a /facilities offer). Waiters get that index and no
       // backoff starts. The failed result itself is never installed.
-      if (isFresh(current, now())) {
+      const failedAt = now();
+      dropFutureState(failedAt);
+      if (isFresh(current, failedAt)) {
         log.warn(`[index] build_failed_fresh_index_used code=${safeCode(code)}`);
         resolveWaiters(current);
         return;
       }
-      lastFailureAt = now();
+      lastFailureAt = failedAt;
       log.warn(`[index] build_failed code=${safeCode(code)}`);
       rejectWaiters(new IndexUnavailableError(safeCode(code)));
     };
@@ -341,15 +396,23 @@ export function createAttachmentIndex({
             log.warn("[index] late_result_dropped");
             return;
           }
+          dropFutureState(now());
+          if (build.epoch !== clockEpoch) {
+            fail("clock_rollback");
+            return;
+          }
           let idx;
           try {
-            idx = buildIndexFromRecords(records, readStartedAt, policy);
+            idx = buildIndexFromRecords(records, readStartedAt, policy, readStartedMono);
             checkNotEmptied(idx);
           } catch (err) {
             fail(err?.code ?? "invalid_data");
             return;
           }
-          install(idx, gen);
+          if (!install(idx, gen) && current === null) {
+            fail("superseded"); // a newer complete read emptied the index
+            return;
+          }
           // The result must satisfy the freshness rule now. If it does not
           // (for example the clock moved back), it is a failed build and the
           // backoff starts. There is no grace period.
@@ -381,6 +444,7 @@ export function createAttachmentIndex({
     if (policy.releaseBlocked) throw new IndexUnavailableError("release_blocked");
     if (policy.photoQuestionXpaths.size === 0) return EMPTY_INDEX; // no photo is served
     const t = now();
+    dropFutureState(t);
     if (isFresh(current, t)) return current;
     let idx;
     if (inflight) {
@@ -399,11 +463,15 @@ export function createAttachmentIndex({
    * Offer records that `/facilities` read from Kobo. Accepted only if fresh,
    * valid, and newer than the installed index. Never throws.
    */
-  function offer(records, readStartedAt) {
+  function offer(records, readStartedAt, readStartedMono) {
     try {
       if (policy.releaseBlocked || policy.photoQuestionXpaths.size === 0) return false;
-      if (!Number.isFinite(readStartedAt) || !isFresh({ readStartedAt }, now())) return false;
-      const idx = buildIndexFromRecords(records, readStartedAt, policy);
+      if (!Number.isFinite(readStartedAt)) return false;
+      // Without a monotonic stamp, the monotonic age is taken as the wall age.
+      const mono = Number.isFinite(readStartedMono) ? readStartedMono : monoNow() - (now() - readStartedAt);
+      if (!isFresh({ readStartedAt, readStartedMono: mono }, now())) return false;
+      dropFutureState(now());
+      const idx = buildIndexFromRecords(records, readStartedAt, policy, mono);
       checkNotEmptied(idx);
       return install(idx, ++generation);
     } catch {
@@ -423,5 +491,5 @@ export function createAttachmentIndex({
     };
   }
 
-  return { getFreshIndex, offer, inspect, policy };
+  return { getFreshIndex, offer, inspect, policy, monoNow };
 }

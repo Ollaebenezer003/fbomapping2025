@@ -107,11 +107,13 @@ export function createApp({
 
       log.log("KOBO TOKEN:", env.KOBO_TOKEN ? "Loaded" : "Missing");
 
+      // Wall and monotonic read start: the index uses both ages (F-2).
       const readStartedAt = now();
+      const readStartedMono = index.monoNow();
       const raw = await fetchAllKoboData({ get, token: env.KOBO_TOKEN });
 
       // Reuse this fresh read for the index (same age rule and order rule).
-      index.offer(raw, readStartedAt);
+      index.offer(raw, readStartedAt, readStartedMono);
 
       const cleaned = raw.map((rec) => {
         let mapped;

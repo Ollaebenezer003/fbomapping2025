@@ -640,18 +640,249 @@ test("L-2: a completed build that is not fresh is a failed build with backoff", 
     await rejectsWith(index.getFreshIndex(), "backoff");
     assert.equal(stub.dataCalls.length, 1, "no immediate repeated Kobo read");
   }
-  // Case 2: the clock steps back below the read start of the installed index.
+  // Case 2 (F-2 corrected): see the F-2 tests below.
+});
+
+// ---- F-1: a complete newer read with zero authorised attachments ----------
+
+const allRefused = () => [
+  { _id: 101, _attachments: [photo(UID_A, { id: 1, is_deleted: true })] },
+  { _id: 102, _attachments: [photo(UID_B, { id: 2, question_xpath: ORGANISATION_XPATH, deleted_at: null })] },
+];
+
+test("F-1: a newer complete offered read with zero authorised attachments invalidates the older index", async () => {
+  const { clock, stub, index, lines } = setup();
+  const old = await index.getFreshIndex();
+  assert.equal(old.has("101", UID_A), true);
+  clock.advance(100_000);
+  stub.state.records = allRefused();
+  assert.equal(index.offer(allRefused(), clock.now()), false, "the empty read is not installed");
+  assert.equal(index.inspect().hasIndex, false, "the older index is invalidated");
+  assert.match(lines.join("\n"), /emptied_read_index_invalidated/);
+  // The next request reads Kobo again and never gets the older index.
+  clock.advance(1);
+  const next = await index.getFreshIndex();
+  assert.notEqual(next, old);
+  assert.equal(next.has("101", UID_A), false);
+  assert.equal(next.has("102", UID_B), false);
+  assert.equal(stub.dataCalls.length, 2);
+});
+
+test("F-1: a newer complete build with zero authorised attachments invalidates the older index; 503, then backoff", async () => {
+  const { clock, stub, index } = setup();
+  await index.getFreshIndex();
+  clock.advance(INDEX_MAX_AGE_MS + 1);
+  stub.state.records = allRefused();
+  await rejectsWith(index.getFreshIndex(), "no_authorised_attachments");
+  assert.equal(index.inspect().hasIndex, false);
+  await rejectsWith(index.getFreshIndex(), "backoff");
+  // A fresh /facilities offer that arrives while a build is pending, with
+  // photos, is not invalidated by an older emptied build result.
+  const gate = gatedData();
+  const s2 = setup({ dataResponder: gate.responder });
+  await s2.index.offer([recordA(), recordB()], s2.clock.now()); // first index
+  s2.clock.advance(INDEX_MAX_AGE_MS + 1);
+  const wait = s2.index.getFreshIndex();
+  await flush();
+  s2.clock.advance(1_000);
+  assert.equal(s2.index.offer([recordA(), recordB()], s2.clock.now()), true, "newer offer installed");
+  gate.pending[0].resolve(jsonPage({ results: allRefused(), next: null }));
+  const got = await wait;
+  assert.equal(got.has("101", UID_A), true, "an older emptied build does not invalidate a newer index");
+});
+
+test("F-1: failed, incomplete or malformed reads never count as an empty dataset and never invalidate", async () => {
+  // Offers: malformed data is refused and the older fresh index stays.
+  {
+    const { clock, index } = setup();
+    const old = await index.getFreshIndex();
+    clock.advance(100_000);
+    for (const bad of [[], "x", null, [null], [recordA(), 7], { results: [] }]) {
+      assert.equal(index.offer(bad, clock.now()), false, JSON.stringify(bad));
+      assert.equal(index.inspect().hasIndex, true, JSON.stringify(bad));
+    }
+    assert.equal(await index.getFreshIndex(), old);
+    // An older read with zero authorised attachments does not invalidate a newer index.
+    assert.equal(index.offer(allRefused(), old.readStartedAt - 1), false);
+    assert.equal(await index.getFreshIndex(), old);
+  }
+  // Builds: an incomplete read (second page fails) or a malformed page gives
+  // 503. No empty index is installed.
+  for (const [label, responder] of [
+    ["second page fails", (url) => url === PAGE2 ? { status: 500, headers: {}, body: Buffer.alloc(0) } : jsonPage({ results: allRefused(), next: PAGE2 })],
+    ["second page malformed", (url) => url === PAGE2 ? jsonPage({ results: "x", next: null }) : jsonPage({ results: allRefused(), next: PAGE2 })],
+    ["empty result list", () => jsonPage({ results: [], next: null })],
+    ["unknown answer shape", () => jsonPage({ rows: allRefused() })],
+  ]) {
+    const { clock, index } = setup();
+    await index.getFreshIndex();
+    clock.advance(INDEX_MAX_AGE_MS + 1);
+    const s = setup({ dataResponder: responder });
+    await assert.rejects(s.index.getFreshIndex(), (err) => err.name === "IndexUnavailableError", label);
+    assert.equal(s.index.inspect().hasIndex, false, `${label}: no empty index installed`);
+    void clock;
+  }
+});
+
+// ---- F-2: clock rollback ----------------------------------------------------
+
+test("F-2: after a clock rollback the old index is never used; a new read is made and installed", async () => {
+  const { clock, stub, index, lines } = setup();
+  const old = await index.getFreshIndex();
+  clock.advance(-60_000);
+  const next = await index.getFreshIndex();
+  assert.notEqual(next, old, "the old index is not treated as fresh");
+  assert.equal(next.readStartedAt, clock.now());
+  assert.equal(next.has("101", UID_A), true);
+  assert.equal(stub.dataCalls.length, 2);
+  assert.match(lines.join("\n"), /clock_rollback_index_invalidated/);
+  // The 300 s maximum age still applies to the new index.
+  clock.advance(INDEX_MAX_AGE_MS);
+  assert.equal(await index.getFreshIndex(), next);
+  clock.advance(1);
+  assert.notEqual(await index.getFreshIndex(), next);
+});
+
+test("F-2: rollback with a failed refresh fails closed; a backoff set in the future ends", async () => {
+  const { clock, stub, index } = setup();
+  await index.getFreshIndex();
+  clock.advance(INDEX_MAX_AGE_MS + 1);
+  stub.state.records = "not records";
+  const unavailable = (err) => err.name === "IndexUnavailableError" && err.code !== "backoff";
+  await assert.rejects(index.getFreshIndex(), unavailable);
+  await rejectsWith(index.getFreshIndex(), "backoff");
+  // Back 120 s: the old index (read 180 s "ago" on the new clock) must not
+  // look fresh, and the backoff must not stay stuck.
+  clock.advance(-120_000);
+  await assert.rejects(index.getFreshIndex(), unavailable, "a new read, not the old index");
+  assert.equal(stub.dataCalls.length, 3);
+  stub.state.records = [recordA(), recordB()];
+  clock.advance(INDEX_RETRY_BACKOFF_MS);
+  assert.equal((await index.getFreshIndex()).has("101", UID_A), true);
+});
+
+test("F-2: an offer after a rollback is accepted; a build that started before the rollback is not used", async () => {
+  {
+    const { clock, index } = setup();
+    await index.getFreshIndex();
+    clock.advance(-60_000);
+    assert.equal(index.offer([recordA()], clock.now()), true);
+    assert.equal(index.inspect().readStartedAt, clock.now());
+  }
+  {
+    const gate = gatedData();
+    const { clock, index } = setup({ dataResponder: gate.responder });
+    const wait = index.getFreshIndex();
+    await flush();
+    clock.advance(-60_000);
+    gate.pending[0].resolve(jsonPage({ results: [recordA()], next: null }));
+    await rejectsWith(wait, "clock_rollback");
+    assert.equal(index.inspect().hasIndex, false, "the pre-rollback result is not installed");
+  }
+});
+
+// A second manual clock for the monotonic age.
+function monoClock(start = 50_000) {
+  let m = start;
+  return { monoNow: () => m, advance: (ms) => { m += ms; } };
+}
+
+test("F-2 (dual clock): a frozen instance (wall time moves, monotonic time does not) never uses an old index", async () => {
+  const mono = monoClock();
+  const { clock, stub, index } = setup({ monoNow: mono.monoNow });
+  const old = await index.getFreshIndex();
+  clock.advance(INDEX_MAX_AGE_MS + 1); // frozen: monotonic time did not move
+  mono.advance(1);
+  const next = await index.getFreshIndex();
+  assert.notEqual(next, old);
+  assert.equal(stub.dataCalls.length, 2);
+});
+
+test("F-2 (dual clock): a wall step back that the detector cannot see is caught by the monotonic age", async () => {
+  const mono = monoClock();
+  const { clock, stub, index } = setup({ monoNow: mono.monoNow });
+  const old = await index.getFreshIndex();
+  // Wall clock goes back 1 h and forward again with no call in between, so
+  // the wall age looks like 1 ms. One real hour passed on the monotonic clock.
+  clock.advance(-3_600_000);
+  clock.advance(3_600_001);
+  mono.advance(3_600_001);
+  const next = await index.getFreshIndex();
+  assert.notEqual(next, old, "the old index is not treated as fresh");
+  assert.equal(stub.dataCalls.length, 2);
+  // Control: both ages within 300 s keep the index.
+  clock.advance(INDEX_MAX_AGE_MS);
+  mono.advance(INDEX_MAX_AGE_MS);
+  assert.equal(await index.getFreshIndex(), next);
+  mono.advance(1);
+  assert.notEqual(await index.getFreshIndex(), next, "monotonic age above 300 s alone expires the index");
+});
+
+test("F-2 (dual clock): an offer is checked on both stamps", async () => {
+  const mono = monoClock();
+  const { clock, index } = setup({ monoNow: mono.monoNow });
+  mono.advance(INDEX_MAX_AGE_MS + 10);
+  assert.equal(index.offer([recordA()], clock.now(), mono.monoNow() - INDEX_MAX_AGE_MS - 1), false, "old monotonic stamp");
+  assert.equal(index.offer([recordA()], clock.now() - INDEX_MAX_AGE_MS - 1, mono.monoNow()), false, "old wall stamp");
+  assert.equal(index.offer([recordA()], clock.now(), mono.monoNow()), true);
+});
+
+test("F-1 (race): after an emptied read, an older in-flight result is never installed", async () => {
+  // Build A is in flight; a newer offered read empties the index; A then returns photos.
+  {
+    const gate = gatedData();
+    const { clock, index } = setup({ dataResponder: gate.responder });
+    assert.equal(index.offer([recordA(), recordB()], clock.now()), true);
+    clock.advance(INDEX_MAX_AGE_MS + 1);
+    const wait = index.getFreshIndex(); // build A, read start tA
+    await flush();
+    clock.advance(1);
+    assert.equal(index.offer(allRefused(), clock.now()), false); // newer, complete, empty
+    assert.equal(index.inspect().hasIndex, false);
+    gate.pending[0].resolve(jsonPage({ results: [recordA(), recordB()], next: null }));
+    await rejectsWith(wait, "superseded");
+    assert.equal(index.inspect().hasIndex, false, "the older result with photos is not installed");
+  }
+  // An emptied build invalidates; an offer whose read started before that build is refused.
   {
     const { clock, stub, index } = setup();
     await index.getFreshIndex();
-    clock.advance(-60_000);
-    await rejectsWith(index.getFreshIndex(), "stale_result");
-    for (let i = 0; i < 5; i += 1) await rejectsWith(index.getFreshIndex(), "backoff");
-    assert.equal(stub.dataCalls.length, 2, "one read, then backoff");
-    clock.advance(INDEX_RETRY_BACKOFF_MS);
-    await rejectsWith(index.getFreshIndex(), "stale_result");
-    assert.equal(stub.dataCalls.length, 3, "at most one read per backoff period");
+    const earlyRead = clock.now() + INDEX_MAX_AGE_MS + 1;
+    clock.advance(INDEX_MAX_AGE_MS + 2);
+    stub.state.records = allRefused();
+    await rejectsWith(index.getFreshIndex(), "no_authorised_attachments");
+    assert.equal(index.offer([recordA(), recordB()], earlyRead), false, "read started before the emptied build");
+    assert.equal(index.inspect().hasIndex, false);
+    clock.advance(1);
+    assert.equal(index.offer([recordA(), recordB()], clock.now()), true, "a later read installs");
   }
+});
+
+// ---- F-3: canonical identifiers ------------------------------------------------
+
+test("F-3: only canonical numeric identifiers are authorised; non-canonical forms count as duplicates", () => {
+  const one = (att, rid = 9) => buildIndexFromRecords([{ _id: rid, _attachments: [att] }], 0, POLICY);
+  for (const id of [7, "7", 0, "0", 123456789012]) assert.equal(one(photo(UID_A, { id })).has("9", String(id)), true, String(id));
+  for (const id of ["007", "07", "00", " 7", "7 ", "+7", "7.0", "1e3", "0x7", "-0", "1234567890123"]) {
+    assert.equal(one(photo(UID_A, { id })).attachmentCount, 0, JSON.stringify(id));
+  }
+  for (const rid of ["007", "0042", " 42"]) assert.equal(one(photo(UID_A), rid).attachmentCount, 0, `record ${rid}`);
+  // The identifier check itself refuses non-canonical forms (separate from the P-6 count).
+  for (const id of ["007", "07", "00"]) assert.equal(attachmentIdentifiers({ id }), null, id);
+  assert.deepEqual(attachmentIdentifiers({ id: "70" }), ["70"]);
+  assert.equal(one(photo(UID_A), "42").has("42", UID_A), true);
+
+  // A refused non-canonical twin makes the canonical identifier ambiguous.
+  for (const twin of ["007", " 7", "07"]) {
+    const rec = { _id: 5, _attachments: [photo(UID_A, { id: 7 }), photo(UID_B, { id: twin, is_deleted: true })] };
+    const idx = buildIndexFromRecords([rec], 0, POLICY);
+    assert.equal(idx.has("5", "7"), false, twin);
+    assert.equal(idx.has("5", UID_A), false, twin);
+    assert.deepEqual(projectAuthorisedAttachments(rec, POLICY), [], twin);
+  }
+  // Control: distinct canonical IDs stay authorised.
+  const ok = { _id: 5, _attachments: [photo(UID_A, { id: 7 }), photo(UID_B, { id: 70 })] };
+  assert.deepEqual(buildIndexFromRecords([ok], 0, POLICY).ids(), ["5/7", "5/70", `5/${UID_A}`, `5/${UID_B}`].sort());
 });
 
 test("Scope item 10 (offer): /facilities reads populate the index only when fresh and valid", async () => {
@@ -707,7 +938,7 @@ test("D31-T16 (index): the index sends only data-page GETs and holds no record c
   const { stub, index } = setup();
   const idx = await index.getFreshIndex();
   assert.ok(stub.calls.every((c) => c.url.startsWith(KOBO_DATA_URL.split("?")[0])));
-  assert.deepEqual(Object.keys(idx).sort(), ["attachmentCount", "has", "ids", "readStartedAt", "recordMarkerRefusals"]);
+  assert.deepEqual(Object.keys(idx).sort(), ["attachmentCount", "has", "ids", "readStartedAt", "readStartedMono", "recordMarkerRefusals"]);
   assert.ok(Object.isFrozen(idx));
 });
 
